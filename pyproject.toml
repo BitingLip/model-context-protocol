@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "biting-lip-mcp"
+version = "1.0.0"
+description = "Model Context Protocol server for Biting Lip AI platform tools"
+authors = [
+    {name = "Biting Lip", email = "contact@bitinglip.com"},
+]
+dependencies = [
+    "mcp>=0.1.0",
+]
+requires-python = ">=3.8"
+
+[project.scripts]
+biting-lip-mcp = "src.server:main"

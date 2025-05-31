@@ -14,14 +14,17 @@ This MCP server provides a collection of tools designed to help AI agents unders
 ## Tools Available
 
 ### 1. `generate_project_tree`
+
 Generate a visual tree structure of a project directory with optional filtering.
 
 **Parameters:**
+
 - `root_path` (required): Root directory path to analyze
 - `ignore_patterns` (optional): Array of patterns to ignore (e.g., `["*.pyc", "__pycache__"]`)
 - `max_depth` (optional): Maximum depth to traverse
 
 **Example:**
+
 ```json
 {
   "tool": "generate_project_tree",
@@ -34,12 +37,15 @@ Generate a visual tree structure of a project directory with optional filtering.
 ```
 
 ### 2. `analyze_python_file`
+
 Analyze a Python file and extract classes, functions, imports, and constants.
 
 **Parameters:**
+
 - `file_path` (required): Path to the Python file to analyze
 
 **Example:**
+
 ```json
 {
   "tool": "analyze_python_file",
@@ -50,12 +56,15 @@ Analyze a Python file and extract classes, functions, imports, and constants.
 ```
 
 ### 3. `get_project_overview`
+
 Get a comprehensive overview of the Python project structure.
 
 **Parameters:**
+
 - `project_root` (optional): Root directory of the project
 
 **Example:**
+
 ```json
 {
   "tool": "get_project_overview",
@@ -66,14 +75,17 @@ Get a comprehensive overview of the Python project structure.
 ```
 
 ### 4. `search_code`
+
 Search for code patterns in the project.
 
 **Parameters:**
+
 - `query` (required): Search query string
 - `file_type` (optional): File extension to search in (default: "py")
 - `project_root` (optional): Root directory to search in
 
 **Example:**
+
 ```json
 {
   "tool": "search_code",
@@ -85,12 +97,15 @@ Search for code patterns in the project.
 ```
 
 ### 5. `find_python_files`
+
 Find all Python files in a directory.
 
 **Parameters:**
+
 - `directory` (optional): Directory to search in
 
 **Example:**
+
 ```json
 {
   "tool": "find_python_files",
@@ -103,17 +118,20 @@ Find all Python files in a directory.
 ## Installation
 
 1. Clone this repository as a submodule:
+
 ```bash
 git submodule add https://github.com/BitingLip/model-context-protocol.git interfaces/model-context-protocol
 ```
 
 2. Install dependencies:
+
 ```bash
 cd interfaces/model-context-protocol
 pip install -r requirements.txt
 ```
 
 3. Test the installation:
+
 ```bash
 python test_server.py
 python test_tools.py
@@ -138,16 +156,19 @@ To use this MCP server with VS Code, add the following to your VS Code settings 
 ## Running the Server
 
 ### Standalone Mode
+
 ```bash
 python src/server.py
 ```
 
 ### As MCP Server
+
 The server is designed to be run through the MCP protocol via stdio transport. When configured in VS Code or other MCP-compatible environments, it will be automatically started when needed.
 
 ## Development
 
 ### Project Structure
+
 ```
 model-context-protocol/
 ├── src/
@@ -173,6 +194,7 @@ model-context-protocol/
 ### Testing
 
 Run the test suite:
+
 ```bash
 python test_server.py    # Test server functionality
 python test_tools.py     # Test individual tools

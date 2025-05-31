@@ -2,9 +2,7 @@
   "mcpServers": {
     "biting-lip-tools": {
       "command": "python",
-      "args": [
-        "src/server.py"
-      ],
+      "args": ["src/server.py"],
       "cwd": "${workspaceFolder}/interfaces/model-context-protocol",
       "env": {}
     }

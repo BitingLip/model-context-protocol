@@ -1,0 +1,31 @@
+{
+  "mcp.servers": {
+    "biting-lip-tools": {
+      "command": "python",
+      "args": ["src/server.py"],
+      "cwd": "${workspaceFolder}",
+      "env": {},
+      "description": "Biting Lip AI Platform Analysis Tools - 21 specialized tools for code analysis, infrastructure discovery, and AI-powered development assistance"
+    }
+  },
+  "copilot-mcp.servers": {
+    "biting-lip-tools": {
+      "command": "python",
+      "args": ["src/server.py"],
+      "cwd": "${workspaceFolder}",
+      "env": {},
+      "description": "Biting Lip AI Platform Analysis Tools - 21 specialized tools for code analysis, infrastructure discovery, and AI-powered development assistance"
+    }
+  },  "mcpServers": {
+    "biting-lip-tools": {
+      "command": "python",
+      "args": ["src/server.py"],
+      "cwd": "${workspaceFolder}",
+      "env": {}
+    }
+  },
+  "python.analysis.extraPaths": [
+    "./src"
+  ],
+  "python.defaultInterpreterPath": "python"
+}

@@ -40,7 +40,7 @@ class CoreToolsMCPServer:
     """MCP Server for core project analysis and infrastructure tools."""
     
     def __init__(self):
-        self.name = "biting-lip-core-tools"
+        self.name = "core-tools"
         self.version = "1.0.0"
         self.project_root = get_project_root()
         

@@ -186,8 +186,7 @@ class MemorySystem:
                 strength FLOAT DEFAULT 0.5,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
-            
-            CREATE TABLE IF NOT EXISTS emotional_reflections (
+              CREATE TABLE IF NOT EXISTS emotional_reflections (
                 id SERIAL PRIMARY KEY,
                 session_id VARCHAR(255) NOT NULL,
                 project_id VARCHAR(255) NOT NULL,
@@ -197,12 +196,56 @@ class MemorySystem:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             
-            -- Indexes for performance
+            -- NEW: Persona Evolution Table
+            CREATE TABLE IF NOT EXISTS persona_memories (
+                id SERIAL PRIMARY KEY,
+                ai_instance_id VARCHAR(255) NOT NULL DEFAULT 'default',
+                persona_type VARCHAR(100) NOT NULL, -- 'core_trait', 'preference', 'skill', 'weakness', 'goal'
+                attribute_name VARCHAR(255) NOT NULL,
+                current_value JSONB NOT NULL,
+                confidence_score FLOAT DEFAULT 0.5,
+                evidence_count INTEGER DEFAULT 1,
+                first_observed TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                growth_trajectory JSONB DEFAULT '[]' -- track changes over time
+            );
+            
+            -- NEW: Self-Reflections Table (Reflexion capability)
+            CREATE TABLE IF NOT EXISTS self_reflections (
+                id SERIAL PRIMARY KEY,
+                session_id VARCHAR(255) NOT NULL,
+                project_id VARCHAR(255) NOT NULL,
+                reflection_trigger VARCHAR(100), -- 'task_completion', 'error', 'feedback', 'periodic'
+                situation_summary TEXT,
+                what_went_well TEXT,
+                what_could_improve TEXT,
+                lessons_learned TEXT,
+                confidence_in_analysis FLOAT DEFAULT 0.5,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            
+            -- NEW: Memory Access Patterns (for forgetting algorithm)
+            CREATE TABLE IF NOT EXISTS memory_access_log (
+                id SERIAL PRIMARY KEY,
+                memory_id INTEGER REFERENCES memories(id) ON DELETE CASCADE,
+                accessed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                access_context VARCHAR(100), -- 'retrieval', 'update', 'related_lookup'
+                relevance_score FLOAT DEFAULT 0.5
+            );
+            
+            -- Enhanced Indexes for performance
             CREATE INDEX IF NOT EXISTS idx_memories_project_session ON memories(project_id, session_id);
             CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(memory_type);
             CREATE INDEX IF NOT EXISTS idx_memories_importance ON memories(importance_score DESC);
             CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_memories_content_gin ON memories USING GIN(content);
+            
+            -- NEW: Indexes for enhanced retrieval
+            CREATE INDEX IF NOT EXISTS idx_memories_composite_score ON memories(importance_score DESC, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_persona_ai_type ON persona_memories(ai_instance_id, persona_type);
+            CREATE INDEX IF NOT EXISTS idx_persona_attribute ON persona_memories(attribute_name);
+            CREATE INDEX IF NOT EXISTS idx_reflections_session ON self_reflections(session_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_access_log_memory_time ON memory_access_log(memory_id, accessed_at DESC);
             """
             
             with self.connection_pool.getconn() as conn:
@@ -611,11 +654,464 @@ class MemorySystem:
             if query and query.lower() not in str(memory["content"]).lower():
                 continue
             results.append(memory)
-        
         # Sort by importance and limit
         results.sort(key=lambda x: x["importance"], reverse=True)
         return results[:limit]
     
+    # ========== ENHANCED MEMORY CAPABILITIES ==========
+    
+    def recall_memories_weighted(
+        self,
+        query: Optional[str] = None,
+        memory_type: Optional[str] = None,
+        project_id: Optional[str] = None,
+        importance_threshold: float = 0.0,
+        limit: int = 10,
+        include_other_projects: bool = False,
+        recency_weight: float = 0.3,
+        importance_weight: float = 0.5,
+        relevance_weight: float = 0.2
+    ) -> List[Dict[str, Any]]:
+        """
+        Enhanced memory recall using weighted scoring (importance + recency + relevance).
+        Based on Generative Agents research: score = α*relevance + β*importance + γ*recency
+        """
+        if not POSTGRES_AVAILABLE or not self.connection_pool:
+            return self._recall_memories_fallback(query, memory_type, limit)
+        
+        try:
+            # Build dynamic query with weighted scoring
+            where_conditions = []
+            params: List[Any] = []
+            
+            # Add query parameters for relevance scoring first
+            params.extend([query, f"%{query}%" if query else None])
+            
+            # Add WHERE conditions and their parameters
+            where_conditions.append("importance_score >= %s")
+            params.append(importance_threshold)
+            
+            if not include_other_projects:
+                where_conditions.append("project_id = %s")
+                params.append(project_id or self.current_project_id)
+            
+            if memory_type:
+                where_conditions.append("memory_type = %s")
+                params.append(memory_type)
+            
+            # Add limit parameter
+            params.append(limit)
+            
+            # Enhanced scoring query
+            search_sql = f"""
+            SELECT 
+                id, project_id, session_id, memory_type, title,
+                content, importance_score, emotional_context, tags,
+                created_at, updated_at,
+                -- Weighted composite score
+                (
+                    {importance_weight} * importance_score +
+                    {recency_weight} * (1.0 - EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - created_at)) / (365.0 * 24 * 3600)) +
+                    {relevance_weight} * CASE 
+                        WHEN %s IS NOT NULL AND content::text ILIKE %s THEN 1.0 
+                        ELSE 0.5 
+                    END
+                ) AS composite_score
+            FROM memories
+            WHERE {' AND '.join(where_conditions)}
+                AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+            ORDER BY composite_score DESC, created_at DESC
+            LIMIT %s;
+            """
+            
+            with self.connection_pool.getconn() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(search_sql, params)
+                    results = cur.fetchall()
+                self.connection_pool.putconn(conn)
+            
+            # Log access for forgetting algorithm
+            if results:
+                self._log_memory_access([row['id'] for row in results], 'weighted_retrieval')
+            
+            # Convert to regular dictionaries and format dates
+            memories = []
+            for row in results:
+                memory = dict(row)
+                memory['created_at'] = memory['created_at'].isoformat()
+                if memory['updated_at']:
+                    memory['updated_at'] = memory['updated_at'].isoformat()
+                memory['composite_score'] = float(memory['composite_score'])
+                memories.append(memory)
+            
+            self.logger.info(f"Weighted recall found {len(memories)} memories (weights: i={importance_weight}, r={recency_weight}, rel={relevance_weight})")
+            return memories
+            
+        except Exception as e:
+            self.logger.error(f"Failed weighted memory recall: {e}")
+            return self.recall_memories(query, memory_type, project_id, importance_threshold, limit, include_other_projects)
+    
+    def store_persona_memory(
+        self,
+        persona_type: str,  # 'core_trait', 'preference', 'skill', 'weakness', 'goal'
+        attribute_name: str,
+        current_value: Union[str, Dict[str, Any]],
+        confidence_score: float = 0.5,
+        ai_instance_id: str = 'default'
+    ) -> Dict[str, Any]:
+        """
+        Store or update AI persona characteristics for self-evolving identity.
+        """
+        if not POSTGRES_AVAILABLE or not self.connection_pool:
+            return {"success": False, "error": "PostgreSQL not available"}
+        
+        try:
+            value_json = current_value if isinstance(current_value, dict) else {"value": current_value}
+            
+            # Check if this persona attribute already exists
+            check_sql = """
+            SELECT id, confidence_score, evidence_count, growth_trajectory
+            FROM persona_memories 
+            WHERE ai_instance_id = %s AND persona_type = %s AND attribute_name = %s;
+            """
+            
+            with self.connection_pool.getconn() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(check_sql, (ai_instance_id, persona_type, attribute_name))
+                    existing = cur.fetchone()
+                    
+                    if existing:
+                        # Update existing persona memory with growth tracking
+                        old_trajectory = existing['growth_trajectory'] or []
+                        new_trajectory = old_trajectory + [{
+                            "timestamp": datetime.now().isoformat(),
+                            "previous_value": existing.get('current_value'),
+                            "new_value": value_json,
+                            "confidence_change": confidence_score - existing['confidence_score']
+                        }]
+                        
+                        update_sql = """
+                        UPDATE persona_memories 
+                        SET current_value = %s, 
+                            confidence_score = %s,
+                            evidence_count = evidence_count + 1,
+                            last_updated = CURRENT_TIMESTAMP,
+                            growth_trajectory = %s
+                        WHERE id = %s
+                        RETURNING id;
+                        """
+                        cur.execute(update_sql, (
+                            self._safe_json(value_json),
+                            confidence_score,
+                            self._safe_json(new_trajectory),
+                            existing['id']
+                        ))
+                        result_id = cur.fetchone()['id']
+                        action = "updated"
+                    else:
+                        # Insert new persona memory
+                        insert_sql = """
+                        INSERT INTO persona_memories (
+                            ai_instance_id, persona_type, attribute_name, 
+                            current_value, confidence_score
+                        ) VALUES (%s, %s, %s, %s, %s)
+                        RETURNING id;
+                        """
+                        cur.execute(insert_sql, (
+                            ai_instance_id, persona_type, attribute_name,
+                            self._safe_json(value_json), confidence_score
+                        ))
+                        result_id = cur.fetchone()['id']
+                        action = "created"
+                
+                conn.commit()
+                self.connection_pool.putconn(conn)
+            
+            self.logger.info(f"Persona memory {action}: {persona_type}.{attribute_name} = {current_value}")
+            
+            return {
+                "success": True,
+                "persona_id": result_id,
+                "action": action,
+                "ai_instance_id": ai_instance_id
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Failed to store persona memory: {e}")
+            return {"success": False, "error": str(e)}
+    
+    def get_current_persona(self, ai_instance_id: str = 'default') -> Dict[str, Any]:
+        """
+        Retrieve current AI persona for prompt context.
+        """
+        if not POSTGRES_AVAILABLE or not self.connection_pool:
+            return {"persona": "Basic AI Assistant (fallback mode)"}
+        
+        try:
+            persona_sql = """
+            SELECT persona_type, attribute_name, current_value, confidence_score
+            FROM persona_memories 
+            WHERE ai_instance_id = %s 
+            ORDER BY persona_type, confidence_score DESC;
+            """
+            
+            with self.connection_pool.getconn() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(persona_sql, (ai_instance_id,))
+                    results = cur.fetchall()
+                self.connection_pool.putconn(conn)
+            
+            # Organize by persona type
+            persona = {
+                "core_traits": {},
+                "preferences": {},
+                "skills": {},
+                "weaknesses": {},
+                "goals": {},
+                "ai_instance_id": ai_instance_id
+            }
+            
+            for row in results:
+                category = row['persona_type'] + 's'  # pluralize
+                if category in persona:
+                    persona[category][row['attribute_name']] = {
+                        "value": row['current_value'],
+                        "confidence": row['confidence_score']
+                    }
+            
+            return persona
+            
+        except Exception as e:
+            self.logger.error(f"Failed to get persona: {e}")
+            return {"error": str(e)}
+    
+    def generate_self_reflection(
+        self,
+        situation_summary: str,
+        reflection_trigger: str = 'manual',
+        project_context: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Generate and store self-reflection for continuous improvement (Reflexion capability).
+        """
+        if not POSTGRES_AVAILABLE or not self.connection_pool:
+            return {"success": False, "error": "PostgreSQL not available"}
+        
+        try:
+            # This would typically use an LLM to generate reflections
+            # For now, we'll store the framework and can enhance with AI later
+            
+            reflection_prompts = {
+                "what_went_well": f"Based on this situation: '{situation_summary}', what aspects went well?",
+                "what_could_improve": f"What could be improved in handling: '{situation_summary}'?",
+                "lessons_learned": f"What key lessons can be learned from: '{situation_summary}'?"
+            }
+            
+            # Store the reflection structure (can be enhanced with LLM generation later)
+            insert_sql = """
+            INSERT INTO self_reflections (
+                session_id, project_id, reflection_trigger, situation_summary,
+                what_went_well, what_could_improve, lessons_learned, confidence_in_analysis
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id, created_at;
+            """
+            
+            with self.connection_pool.getconn() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(insert_sql, (
+                        self.session_id,
+                        project_context or self.current_project_id,
+                        reflection_trigger,
+                        situation_summary,
+                        "Framework ready for AI analysis",  # Placeholder
+                        "Framework ready for AI analysis",  # Placeholder  
+                        "Framework ready for AI analysis",  # Placeholder
+                        0.5  # Medium confidence until AI enhancement
+                    ))
+                    result = cur.fetchone()
+                conn.commit()
+                self.connection_pool.putconn(conn)
+            
+            self.logger.info(f"Self-reflection stored: {reflection_trigger} - {situation_summary[:50]}...")
+            
+            return {
+                "success": True,
+                "reflection_id": result['id'],
+                "created_at": result['created_at'].isoformat(),
+                "trigger": reflection_trigger,
+                "note": "Framework ready - can be enhanced with LLM analysis"
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Failed to generate reflection: {e}")
+            return {"success": False, "error": str(e)}
+    
+    def apply_forgetting_curve(self, decay_factor: float = 0.1) -> Dict[str, Any]:
+        """
+        Apply Ebbinghaus forgetting curve to reduce importance of old, unaccessed memories.
+        """
+        if not POSTGRES_AVAILABLE or not self.connection_pool:
+            return {"success": False, "error": "PostgreSQL not available"}
+        
+        try:
+            # Calculate decay based on age and access patterns
+            decay_sql = """
+            UPDATE memories 
+            SET importance_score = GREATEST(0.1, importance_score * (1.0 - %s * 
+                EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - 
+                    COALESCE((
+                        SELECT MAX(accessed_at) 
+                        FROM memory_access_log 
+                        WHERE memory_id = memories.id
+                    ), created_at)
+                )) / (30.0 * 24 * 3600)  -- 30 days in seconds
+            ))
+            WHERE importance_score > 0.1
+                AND created_at < CURRENT_TIMESTAMP - INTERVAL '7 days';
+            """
+            
+            with self.connection_pool.getconn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(decay_sql, (decay_factor,))
+                    affected_rows = cur.rowcount
+                conn.commit()
+                self.connection_pool.putconn(conn)
+            
+            self.logger.info(f"Applied forgetting curve to {affected_rows} memories")
+            
+            return {
+                "success": True,
+                "memories_decayed": affected_rows,
+                "decay_factor": decay_factor
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Failed to apply forgetting curve: {e}")
+            return {"success": False, "error": str(e)}
+    
+    def _log_memory_access(self, memory_ids: List[int], access_context: str, relevance_score: float = 0.5) -> None:
+        """Log memory access for forgetting algorithm."""
+        if not POSTGRES_AVAILABLE or not self.connection_pool or not memory_ids:
+            return
+        
+        try:
+            insert_sql = """
+            INSERT INTO memory_access_log (memory_id, access_context, relevance_score)
+            VALUES (%s, %s, %s);
+            """
+            
+            with self.connection_pool.getconn() as conn:
+                with conn.cursor() as cur:
+                    for memory_id in memory_ids:
+                        cur.execute(insert_sql, (memory_id, access_context, relevance_score))
+                conn.commit()
+                self.connection_pool.putconn(conn)
+                
+        except Exception as e:
+            self.logger.debug(f"Failed to log memory access: {e}")  # Non-critical, use debug level
+    
+    def get_persona_evolution_summary(self, days_back: int = 30, persona_type: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Get summary of how the AI persona has evolved over time.
+        
+        Args:
+            days_back: Number of days to analyze
+            persona_type: Filter by specific persona type
+            
+        Returns:
+            Dictionary with persona evolution insights and changes
+        """
+        if not POSTGRES_AVAILABLE or not self.connection_pool:
+            return {"error": "PostgreSQL not available"}
+        
+        try:            # Get persona changes over time
+            if persona_type:
+                evolution_sql = """
+                SELECT 
+                    persona_type,
+                    attribute_name,
+                    current_value,
+                    confidence_score,
+                    growth_trajectory,
+                    first_observed,
+                    last_updated
+                FROM persona_memories 
+                WHERE first_observed >= CURRENT_TIMESTAMP - INTERVAL %s
+                    AND persona_type = %s
+                ORDER BY persona_type, attribute_name, last_updated DESC;
+                """
+                params = (f"{days_back} days", persona_type)
+            else:
+                evolution_sql = """
+                SELECT 
+                    persona_type,
+                    attribute_name,
+                    current_value,
+                    confidence_score,
+                    growth_trajectory,
+                    first_observed,
+                    last_updated
+                FROM persona_memories 
+                WHERE first_observed >= CURRENT_TIMESTAMP - INTERVAL %s
+                ORDER BY persona_type, attribute_name, last_updated DESC;
+                """
+                params = (f"{days_back} days",)
+            
+            with self.connection_pool.getconn() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(evolution_sql, params)
+                    results = cur.fetchall()
+                self.connection_pool.putconn(conn)
+            
+            # Analyze evolution patterns
+            evolution_summary = {
+                "analysis_period_days": days_back,
+                "total_attributes_tracked": len(results),
+                "persona_types": {},
+                "confidence_trends": {},
+                "recent_changes": []
+            }
+            
+            # Group by persona type and analyze trends
+            for row in results:
+                p_type = row['persona_type']
+                if p_type not in evolution_summary["persona_types"]:
+                    evolution_summary["persona_types"][p_type] = {
+                        "attributes": {},
+                        "average_confidence": 0.0,
+                        "total_attributes": 0
+                    }
+                
+                attr_name = row['attribute_name']
+                evolution_summary["persona_types"][p_type]["attributes"][attr_name] = {
+                    "current_value": row['current_value'],
+                    "confidence": row['confidence_score'],
+                    "growth_trajectory": row['growth_trajectory'],
+                    "last_updated": row['last_updated'].isoformat() if row['last_updated'] else None
+                }
+                
+                # Track recent changes
+                if row['last_updated'] and (datetime.now() - row['last_updated']).days <= 7:
+                    evolution_summary["recent_changes"].append({
+                        "type": p_type,
+                        "attribute": attr_name,
+                        "updated": row['last_updated'].isoformat(),
+                        "confidence": row['confidence_score']
+                    })
+            
+            # Calculate averages
+            for p_type, data in evolution_summary["persona_types"].items():
+                if data["attributes"]:
+                    confidences = [attr["confidence"] for attr in data["attributes"].values()]
+                    data["average_confidence"] = sum(confidences) / len(confidences)
+                    data["total_attributes"] = len(data["attributes"])
+            
+            return evolution_summary
+            
+        except Exception as e:
+            self.logger.error(f"Failed to get persona evolution summary: {e}")
+            return {"error": str(e)}
+
     def __del__(self) -> None:
         """Clean up database connections."""
         if self.connection_pool:

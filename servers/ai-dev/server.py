@@ -33,7 +33,7 @@ class AIDevelopmentMCPServer:
     """MCP Server for AI-powered development tools using local Ollama LLMs."""
     
     def __init__(self):
-        self.name = "biting-lip-ai-dev"
+        self.name = "ai-dev"
         self.version = "1.0.0"
         self.project_root = get_project_root()
         

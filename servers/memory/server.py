@@ -30,7 +30,7 @@ class MemoryMCPServer:
     """MCP Server for AI Memory System - Persistent memory across conversations."""
     
     def __init__(self):
-        self.name = "biting-lip-memory"
+        self.name = "memory"
         self.version = "1.0.0"
         self.project_root = get_project_root()
         
@@ -89,59 +89,90 @@ class MemoryMCPServer:
                     }
                 },
                 {
-                    "name": "reflect_on_interaction",
-                    "description": "Store an emotional reflection about an interaction for future learning",
+                    "name": "recall_memories_weighted",
+                    "description": "Enhanced recall with weighted scoring based on importance, recency, and relevance",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
-                            "reflection_type": {"type": "string", "description": "Type of reflection (e.g., 'collaboration', 'problem_solving', 'learning')"},
-                            "content": {"type": "object", "description": "Reflection content with structured data"},
-                            "mood_score": {"type": "number", "minimum": -1, "maximum": 1, "description": "Emotional state score (-1.0 to 1.0, negative to positive)"}
-                        },
-                        "required": ["reflection_type", "content"]
-                    }
-                },
-                {
-                    "name": "get_memory_summary",
-                    "description": "Get a summary of stored memories for the current project",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {},
-                        "required": []
-                    }
-                },
-                {
-                    "name": "get_emotional_insights",
-                    "description": "Get emotional insights and patterns from recent interactions",
-                    "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "days_back": {"type": "integer", "minimum": 1, "maximum": 365, "description": "Number of days to look back"}
+                            "query": {"type": "string", "description": "Text query for semantic search"},
+                            "memory_type": {"type": "string", "description": "Filter by memory type"},
+                            "project_id": {"type": "string", "description": "Filter by project (defaults to current)"},
+                            "importance_threshold": {"type": "number", "minimum": 0, "maximum": 1, "description": "Minimum importance score"},
+                            "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "Maximum number of memories to return"},
+                            "include_other_projects": {"type": "boolean", "description": "Include memories from other projects"},
+                            "importance_weight": {"type": "number", "minimum": 0, "maximum": 1, "description": "Weight for importance score"},
+                            "recency_weight": {"type": "number", "minimum": 0, "maximum": 1, "description": "Weight for recency score"},
+                            "relevance_weight": {"type": "number", "minimum": 0, "maximum": 1, "description": "Weight for relevance score"}
                         },
                         "required": []
                     }
                 },
                 {
-                    "name": "update_memory",
-                    "description": "Update an existing memory with new content",
+                    "name": "store_persona_memory",
+                    "description": "Store or update AI persona characteristics for identity evolution",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
-                            "memory_id": {"type": "string", "description": "ID of the memory to update"},
-                            "content": {"description": "New memory content"},
-                            "title": {"type": "string", "description": "Optional new title"},
-                            "importance": {"type": "number", "minimum": 0, "maximum": 1, "description": "New importance score"},
-                            "tags": {"type": "array", "items": {"type": "string"}, "description": "New tags list"}
+                            "persona_type": {"type": "string", "description": "Type of persona attribute (e.g., 'preference', 'skill', 'personality_trait')"},
+                            "attribute_name": {"type": "string", "description": "Name of the attribute (e.g., 'coding_style', 'communication_preference')"},
+                            "current_value": {"description": "Current value of the attribute"},
+                            "confidence_score": {"type": "number", "minimum": 0, "maximum": 1, "description": "Confidence in this attribute (0.0 to 1.0)"},
+                            "ai_instance_id": {"type": "string", "description": "Specific AI instance identifier"}
                         },
-                        "required": ["memory_id"]
+                        "required": ["persona_type", "attribute_name", "current_value"]
                     }
                 },
                 {
-                    "name": "cleanup_expired_memories",
-                    "description": "Remove expired memories from the database",
+                    "name": "get_current_persona",
+                    "description": "Retrieve current AI persona characteristics organized by type",
                     "inputSchema": {
                         "type": "object",
-                        "properties": {},
+                        "properties": {
+                            "persona_type": {"type": "string", "description": "Filter by specific persona type"},
+                            "min_confidence": {"type": "number", "minimum": 0, "maximum": 1, "description": "Minimum confidence threshold"},
+                            "ai_instance_id": {"type": "string", "description": "Specific AI instance identifier"}
+                        },
+                        "required": []
+                    }
+                },
+                {
+                    "name": "generate_self_reflection",
+                    "description": "Generate self-reflection on recent interactions for continuous improvement",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "reflection_trigger": {"type": "string", "description": "What triggered this reflection"},
+                            "situation_summary": {"type": "string", "description": "Summary of the situation being reflected upon"},
+                            "what_went_well": {"type": "string", "description": "What went well in the interaction"},
+                            "what_could_improve": {"type": "string", "description": "What could be improved"},
+                            "lessons_learned": {"type": "string", "description": "Key lessons learned"},
+                            "reflection_scope": {"type": "string", "description": "Scope of reflection ('session', 'interaction', 'task')"}
+                        },
+                        "required": ["reflection_trigger", "situation_summary"]
+                    }
+                },
+                {
+                    "name": "apply_forgetting_curve",
+                    "description": "Apply forgetting curve algorithm to decay old or unused memories",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "days_threshold": {"type": "integer", "description": "Age threshold in days"},
+                            "access_threshold": {"type": "integer", "description": "Minimum access count threshold"},
+                            "dry_run": {"type": "boolean", "description": "Just return what would be affected"}
+                        },
+                        "required": []
+                    }
+                },
+                {
+                    "name": "get_persona_evolution_summary",
+                    "description": "Get summary of how the AI persona has evolved over time",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "days_back": {"type": "integer", "minimum": 1, "maximum": 365, "description": "Number of days to analyze"},
+                            "persona_type": {"type": "string", "description": "Filter by specific persona type"}
+                        },
                         "required": []
                     }
                 },
@@ -165,6 +196,18 @@ class MemoryMCPServer:
                 result = self.memory_tool.store_memory(**arguments)
             elif name == "recall_memories":
                 result = self.memory_tool.recall_memories(**arguments)
+            elif name == "recall_memories_weighted":
+                result = self.memory_tool.recall_memories_weighted(**arguments)
+            elif name == "store_persona_memory":
+                result = self.memory_tool.store_persona_memory(**arguments)
+            elif name == "get_current_persona":
+                result = self.memory_tool.get_current_persona(**arguments)
+            elif name == "generate_self_reflection":
+                result = self.memory_tool.generate_self_reflection(**arguments)
+            elif name == "apply_forgetting_curve":
+                result = self.memory_tool.apply_forgetting_curve(**arguments)
+            elif name == "get_persona_evolution_summary":
+                result = self.memory_tool.get_persona_evolution_summary(**arguments)
             elif name == "reflect_on_interaction":
                 result = self.memory_tool.reflect_on_interaction(**arguments)
             elif name == "get_memory_summary":

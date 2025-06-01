@@ -59,6 +59,29 @@ class MemoryMCPTool:
         except Exception as e:
             return [{"error": f"Failed to recall memories: {e}"}]
     
+    def recall_memories_weighted(self, **kwargs) -> List[Dict[str, Any]]:
+        """
+        Enhanced recall with weighted scoring based on importance, recency, and relevance.
+        
+        Args:
+            query (str, optional): Text query for semantic search
+            memory_type (str, optional): Filter by memory type
+            project_id (str, optional): Filter by project (defaults to current)
+            importance_threshold (float, optional): Minimum importance score, default 0.0
+            limit (int, optional): Maximum number of memories to return, default 10
+            include_other_projects (bool, optional): Include memories from other projects, default False
+            importance_weight (float, optional): Weight for importance score, default 0.4
+            recency_weight (float, optional): Weight for recency score, default 0.3
+            relevance_weight (float, optional): Weight for relevance score, default 0.3
+        
+        Returns:
+            List of memories with weighted composite scores
+        """
+        try:
+            return self.memory_system.recall_memories_weighted(**kwargs)
+        except Exception as e:
+            return [{"error": f"Failed to recall weighted memories: {e}"}]
+    
     def update_memory(self, memory_id: int, **kwargs) -> Dict[str, Any]:
         """
         Update an existing memory.
@@ -81,6 +104,95 @@ class MemoryMCPTool:
                 return {"success": False, "error": "Update not supported in fallback mode"}
         except Exception as e:
             return {"success": False, "error": f"Failed to update memory: {e}"}
+    
+    def store_persona_memory(self, **kwargs) -> Dict[str, Any]:
+        """
+        Store or update AI persona characteristics for identity evolution.
+        
+        Args:
+            persona_type (str): Type of persona attribute (e.g., 'preference', 'skill', 'personality_trait')
+            attribute_name (str): Name of the attribute (e.g., 'coding_style', 'communication_preference')
+            current_value (str|dict): Current value of the attribute
+            confidence_score (float, optional): Confidence in this attribute (0.0 to 1.0), default 0.7
+            evidence (str, optional): Evidence supporting this attribute value
+            ai_instance_id (str, optional): Specific AI instance identifier
+        
+        Returns:
+            Dictionary with persona memory ID and metadata
+        """
+        try:
+            return self.memory_system.store_persona_memory(**kwargs)
+        except Exception as e:
+            return {"success": False, "error": f"Failed to store persona memory: {e}"}
+    
+    def get_current_persona(self, **kwargs) -> Dict[str, Any]:
+        """
+        Retrieve current AI persona characteristics organized by type.
+        
+        Args:
+            persona_type (str, optional): Filter by specific persona type
+            min_confidence (float, optional): Minimum confidence threshold, default 0.3
+            ai_instance_id (str, optional): Specific AI instance identifier
+        
+        Returns:
+            Dictionary with organized persona data by type
+        """
+        try:
+            return self.memory_system.get_current_persona(**kwargs)
+        except Exception as e:
+            return {"error": f"Failed to get current persona: {e}"}
+    
+    def generate_self_reflection(self, **kwargs) -> Dict[str, Any]:
+        """
+        Generate self-reflection on recent interactions for continuous improvement.
+        
+        Args:
+            reflection_trigger (str): What triggered this reflection
+            situation_summary (str): Summary of the situation being reflected upon
+            what_went_well (str, optional): What went well in the interaction
+            what_could_improve (str, optional): What could be improved
+            lessons_learned (str, optional): Key lessons learned
+            reflection_scope (str, optional): Scope of reflection ('session', 'interaction', 'task'), default 'interaction'
+        
+        Returns:
+            Dictionary with reflection ID and insights
+        """
+        try:
+            return self.memory_system.generate_self_reflection(**kwargs)
+        except Exception as e:
+            return {"success": False, "error": f"Failed to generate self-reflection: {e}"}
+    
+    def apply_forgetting_curve(self, **kwargs) -> Dict[str, Any]:
+        """
+        Apply forgetting curve algorithm to decay old or unused memories.
+        
+        Args:
+            days_threshold (int, optional): Age threshold in days, default 30
+            access_threshold (int, optional): Minimum access count threshold, default 2
+            dry_run (bool, optional): Just return what would be affected, default True
+        
+        Returns:
+            Dictionary with forgetting curve results and affected memories
+        """
+        try:
+            return self.memory_system.apply_forgetting_curve(**kwargs)
+        except Exception as e:
+            return {"success": False, "error": f"Failed to apply forgetting curve: {e}"}
+    
+    def get_persona_evolution_summary(self, **kwargs) -> Dict[str, Any]:
+        """
+        Get summary of how the AI persona has evolved over time.
+        
+        Args:
+            days_back (int, optional): Number of days to analyze, default 30
+            persona_type (str, optional): Filter by specific persona type
+        
+        Returns:
+            Dictionary with persona evolution insights and changes        """
+        try:
+            return self.memory_system.get_persona_evolution_summary(**kwargs)
+        except Exception as e:
+            return {"error": f"Failed to get persona evolution summary: {e}"}
     
     def reflect_on_interaction(self, **kwargs) -> Dict[str, Any]:
         """
@@ -206,10 +318,40 @@ def create_memory_tools(project_root: str) -> Dict[str, Any]:
         """Get project context."""
         return memory_tool.get_project_context(**kwargs)
     
+    async def _recall_memories_weighted(**kwargs):
+        """Enhanced recall with weighted scoring."""
+        return memory_tool.recall_memories_weighted(**kwargs)
+    
+    async def _store_persona_memory(**kwargs):
+        """Store AI persona characteristics."""
+        return memory_tool.store_persona_memory(**kwargs)
+    
+    async def _get_current_persona(**kwargs):
+        """Get current AI persona."""
+        return memory_tool.get_current_persona(**kwargs)
+    
+    async def _generate_self_reflection(**kwargs):
+        """Generate self-reflection."""
+        return memory_tool.generate_self_reflection(**kwargs)
+    
+    async def _apply_forgetting_curve(**kwargs):
+        """Apply forgetting curve algorithm."""
+        return memory_tool.apply_forgetting_curve(**kwargs)
+    
+    async def _get_persona_evolution_summary(**kwargs):
+        """Get persona evolution summary."""
+        return memory_tool.get_persona_evolution_summary(**kwargs)
+    
     return {
         "store_memory": _store_memory,
         "recall_memories": _recall_memories,
+        "recall_memories_weighted": _recall_memories_weighted,
         "update_memory": _update_memory,
+        "store_persona_memory": _store_persona_memory,
+        "get_current_persona": _get_current_persona,
+        "generate_self_reflection": _generate_self_reflection,
+        "apply_forgetting_curve": _apply_forgetting_curve,
+        "get_persona_evolution_summary": _get_persona_evolution_summary,
         "reflect_on_interaction": _reflect_on_interaction,
         "get_emotional_insights": _get_emotional_insights,
         "get_memory_summary": _get_memory_summary,

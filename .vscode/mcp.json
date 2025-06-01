@@ -1,20 +1,20 @@
 {
   "mcpServers": {
-    "biting-lip-memory": {
+    "memory": {
       "command": "python",
       "args": ["servers/memory/server.py"],
       "cwd": "${workspaceFolder}",
       "env": {},
       "description": "Biting Lip Memory Server - AI Memory System for persistent collaboration context"
     },
-    "biting-lip-ai-dev": {
+    "ai-dev": {
       "command": "python", 
       "args": ["servers/ai-dev/server.py"],
       "cwd": "${workspaceFolder}",
       "env": {},
       "description": "Biting Lip AI Development Server - AI-powered development tools using local Ollama LLMs"
     },
-    "biting-lip-core-tools": {
+    "core-tools": {
       "command": "python",
       "args": ["servers/core-tools/server.py"],
       "cwd": "${workspaceFolder}",

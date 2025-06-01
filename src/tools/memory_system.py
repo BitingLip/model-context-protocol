@@ -46,8 +46,7 @@ class MemorySystem:
         self.current_project_id = self._detect_project_id()
         self.session_id = self._generate_session_id()
         
-        # Database configuration
-        self.db_config = self._load_db_config()
+        # Database configuration        self.db_config = self._load_db_config()
         self.connection_pool: Optional[Any] = None
         self.fallback_storage: Dict[int, Dict[str, Any]] = {}
         
@@ -56,13 +55,53 @@ class MemorySystem:
     
     def _load_db_config(self) -> Dict[str, str]:
         """Load PostgreSQL configuration from environment or config file."""
+        # Try to load from config file first
+        self._load_env_file()
+        
+        # Get required config values - no hardcoded credentials
+        host = os.getenv('MEMORY_DB_HOST', 'localhost')
+        port = os.getenv('MEMORY_DB_PORT', '5432')
+        database = os.getenv('MEMORY_DB_NAME', 'ai_memory')
+        user = os.getenv('MEMORY_DB_USER')
+        password = os.getenv('MEMORY_DB_PASSWORD')
+        
+        # Validate required credentials are provided
+        if not user or not password:
+            self.logger.error("Database credentials not found in environment variables or config file")
+            self.logger.info("Please set MEMORY_DB_USER and MEMORY_DB_PASSWORD in config/services/mcp-memory.env")
+            raise ValueError("Database credentials required but not provided")
+        
         return {
-            'host': os.getenv('MEMORY_DB_HOST', 'localhost'),
-            'port': os.getenv('MEMORY_DB_PORT', '5432'),
-            'database': os.getenv('MEMORY_DB_NAME', 'ai_memory'),
-            'user': os.getenv('MEMORY_DB_USER', 'postgres'),
-            'password': os.getenv('MEMORY_DB_PASSWORD', 'postgres'),
+            'host': host,
+            'port': port,
+            'database': database,
+            'user': user,
+            'password': password,
         }
+    
+    def _load_env_file(self) -> None:
+        """Load environment variables from config file."""
+        try:
+            # Find the project root (4 levels up from this file)
+            current_file = Path(__file__).resolve()
+            project_root = current_file.parent.parent.parent.parent.parent
+            env_file = project_root / "config" / "services" / "mcp-memory.env"
+            
+            if env_file.exists():
+                # Simple .env file parser
+                with open(env_file, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith('#') and '=' in line:
+                            key, value = line.split('=', 1)
+                            # Only set if not already in environment
+                            if key not in os.environ:
+                                os.environ[key] = value
+                self.logger.info(f"Loaded config from {env_file}")
+            else:
+                self.logger.info(f"Config file not found: {env_file}, using defaults")
+        except Exception as e:
+            self.logger.warning(f"Failed to load config file: {e}")
     
     def _detect_project_id(self) -> str:
         """Detect current project based on directory structure and git repo."""

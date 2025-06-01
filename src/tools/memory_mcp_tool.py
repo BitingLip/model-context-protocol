@@ -8,7 +8,7 @@ allowing AI assistants to store, recall, and reflect on memories across conversa
 
 import os
 from typing import Any, Dict, List, Optional
-from .memory_system_fixed import MemorySystem
+from .memory_system import MemorySystem
 
 
 class MemoryMCPTool:

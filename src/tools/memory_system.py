@@ -35,9 +35,13 @@ class MemorySystem:
     - Semantic search capabilities
     - Automatic backup and recovery
     - Memory importance scoring
-    - Temporal relationship tracking
-    """
+    - Temporal relationship tracking    """
+    
     def __init__(self, project_root: Optional[str] = None):
+        # Logging setup first
+        logging.basicConfig(level=logging.INFO)
+        self.logger = logging.getLogger(__name__)
+        
         self.project_root = project_root or os.getcwd()
         self.current_project_id = self._detect_project_id()
         self.session_id = self._generate_session_id()
@@ -45,14 +49,10 @@ class MemorySystem:
         # Database configuration
         self.db_config = self._load_db_config()
         self.connection_pool: Optional[Any] = None
-        self.fallback_storage: Dict[int, Dict[str, Any]] = {}  # In-memory fallback if PostgreSQL unavailable
+        self.fallback_storage: Dict[int, Dict[str, Any]] = {}
         
         # Initialize database
         self._initialize_database()
-        
-        # Logging setup
-        logging.basicConfig(level=logging.INFO)
-        self.logger = logging.getLogger(__name__)
     
     def _load_db_config(self) -> Dict[str, str]:
         """Load PostgreSQL configuration from environment or config file."""
@@ -60,8 +60,8 @@ class MemorySystem:
             'host': os.getenv('MEMORY_DB_HOST', 'localhost'),
             'port': os.getenv('MEMORY_DB_PORT', '5432'),
             'database': os.getenv('MEMORY_DB_NAME', 'ai_memory'),
-            'user': os.getenv('MEMORY_DB_USER', 'ai_assistant'),
-            'password': os.getenv('MEMORY_DB_PASSWORD', 'secure_password'),
+            'user': os.getenv('MEMORY_DB_USER', 'postgres'),
+            'password': os.getenv('MEMORY_DB_PASSWORD', 'postgres'),
         }
     
     def _detect_project_id(self) -> str:
@@ -91,7 +91,7 @@ class MemorySystem:
         project_hash = hashlib.md5(self.project_root.encode()).hexdigest()[:8]
         return f"{self.current_project_id}_{project_hash}_{timestamp}"
     
-    def _initialize_database(self):
+    def _initialize_database(self) -> None:
         """Initialize PostgreSQL database and tables."""
         if not POSTGRES_AVAILABLE:
             self.logger.warning("Using fallback memory storage - install psycopg2 for full functionality")
@@ -99,19 +99,20 @@ class MemorySystem:
         
         try:
             # Create connection pool
-            self.connection_pool = psycopg2.pool.ThreadedConnectionPool(
-                1, 20,  # min and max connections
-                **self.db_config
-            )
-            
-            # Create tables if they don't exist
-            self._create_tables()
+            if POSTGRES_AVAILABLE:
+                self.connection_pool = psycopg2.pool.ThreadedConnectionPool(
+                    1, 20,  # min and max connections
+                    **self.db_config
+                )
+                
+                # Create tables if they don't exist
+                self._create_tables()
             
         except Exception as e:
             self.logger.error(f"Failed to initialize PostgreSQL: {e}")
             self.logger.info("Falling back to in-memory storage")
     
-    def _create_tables(self):
+    def _create_tables(self) -> None:
         """Create necessary database tables."""
         create_sql = """
         CREATE EXTENSION IF NOT EXISTS vector;
@@ -129,7 +130,7 @@ class MemorySystem:
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             expires_at TIMESTAMP,
-            embedding VECTOR(384)  -- For semantic search
+            embedding VECTOR(384)
         );
         
         CREATE TABLE IF NOT EXISTS memory_relationships (
@@ -159,38 +160,25 @@ class MemorySystem:
         CREATE INDEX IF NOT EXISTS idx_memories_content_gin ON memories USING GIN(content);
         """
         
-        with self.connection_pool.getconn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(create_sql)
-            conn.commit()
-            self.connection_pool.putconn(conn)
+        if self.connection_pool:
+            with self.connection_pool.getconn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(create_sql)
+                conn.commit()
+                self.connection_pool.putconn(conn)
     
     def store_memory(
         self,
         memory_type: str,
         content: Union[str, Dict[str, Any]],
-        title: str = None,
+        title: Optional[str] = None,
         importance: float = 0.5,
-        emotional_context: Dict[str, Any] = None,
-        tags: List[str] = None,
-        expires_in_days: int = None
+        emotional_context: Optional[Dict[str, Any]] = None,
+        tags: Optional[List[str]] = None,
+        expires_in_days: Optional[int] = None
     ) -> Dict[str, Any]:
-        """
-        Store a new memory.
-        
-        Args:
-            memory_type: Type of memory (e.g., 'code_insight', 'user_preference', 'problem_solution')
-            content: Memory content (string or structured data)
-            title: Optional short title for the memory
-            importance: Importance score (0.0 to 1.0)
-            emotional_context: Emotional context data
-            tags: List of tags for categorization
-            expires_in_days: Auto-delete after this many days
-        
-        Returns:
-            Dictionary with memory ID and metadata
-        """
-        if not POSTGRES_AVAILABLE:
+        """Store a new memory."""
+        if not POSTGRES_AVAILABLE or not self.connection_pool:
             return self._store_memory_fallback(memory_type, content, title, importance)
         
         try:
@@ -244,34 +232,21 @@ class MemorySystem:
     
     def recall_memories(
         self,
-        query: str = None,
-        memory_type: str = None,
-        project_id: str = None,
+        query: Optional[str] = None,
+        memory_type: Optional[str] = None,
+        project_id: Optional[str] = None,
         importance_threshold: float = 0.0,
         limit: int = 10,
         include_other_projects: bool = False
     ) -> List[Dict[str, Any]]:
-        """
-        Recall relevant memories based on query and filters.
-        
-        Args:
-            query: Text query for semantic search
-            memory_type: Filter by memory type
-            project_id: Filter by project (defaults to current)
-            importance_threshold: Minimum importance score
-            limit: Maximum number of memories to return
-            include_other_projects: Include memories from other projects
-        
-        Returns:
-            List of matching memories
-        """
-        if not POSTGRES_AVAILABLE:
+        """Recall relevant memories based on query and filters."""
+        if not POSTGRES_AVAILABLE or not self.connection_pool:
             return self._recall_memories_fallback(query, memory_type, limit)
         
         try:
             # Build dynamic query
             where_conditions = ["importance_score >= %s"]
-            params = [importance_threshold]
+            params: List[Any] = [importance_threshold]
             
             if not include_other_projects:
                 where_conditions.append("project_id = %s")
@@ -323,22 +298,116 @@ class MemorySystem:
             self.logger.error(f"Failed to recall memories: {e}")
             return []
     
+    def reflect_on_interaction(
+        self,
+        reflection_type: str,
+        content: Dict[str, Any],
+        mood_score: Optional[float] = None
+    ) -> Dict[str, Any]:
+        """Store an emotional reflection about an interaction."""
+        if not POSTGRES_AVAILABLE or not self.connection_pool:
+            return {"success": False, "error": "PostgreSQL not available"}
+        
+        try:
+            insert_sql = """
+            INSERT INTO emotional_reflections (
+                session_id, project_id, reflection_type, content, mood_score
+            ) VALUES (%s, %s, %s, %s, %s)
+            RETURNING id, created_at;
+            """
+            
+            with self.connection_pool.getconn() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(insert_sql, (
+                        self.session_id,
+                        self.current_project_id,
+                        reflection_type,
+                        Json(content),
+                        mood_score
+                    ))
+                    result = cur.fetchone()
+                conn.commit()
+                self.connection_pool.putconn(conn)
+            
+            self.logger.info(f"Stored emotional reflection: {reflection_type}")
+            
+            return {
+                "success": True,
+                "reflection_id": result['id'],
+                "created_at": result['created_at'].isoformat()
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Failed to store reflection: {e}")
+            return {"success": False, "error": str(e)}
+    
+    def get_memory_summary(self) -> Dict[str, Any]:
+        """Get a summary of stored memories for the current project."""
+        if not POSTGRES_AVAILABLE or not self.connection_pool:
+            return {
+                "total_memories": len(self.fallback_storage),
+                "storage_type": "fallback",
+                "project_id": self.current_project_id
+            }
+        
+        try:
+            summary_sql = """
+            SELECT 
+                memory_type,
+                COUNT(*) as count,
+                AVG(importance_score) as avg_importance,
+                MAX(created_at) as latest_memory
+            FROM memories
+            WHERE project_id = %s
+              AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+            GROUP BY memory_type
+            ORDER BY count DESC;
+            """
+            
+            with self.connection_pool.getconn() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute(summary_sql, (self.current_project_id,))
+                    results = cur.fetchall()
+                self.connection_pool.putconn(conn)
+            
+            total_memories = sum(row['count'] for row in results)
+            
+            return {
+                "project_id": self.current_project_id,
+                "session_id": self.session_id,
+                "total_memories": total_memories,
+                "memory_types": [
+                    {
+                        "type": row['memory_type'],
+                        "count": row['count'],
+                        "avg_importance": float(row['avg_importance']),
+                        "latest": row['latest_memory'].isoformat()
+                    }
+                    for row in results
+                ],
+                "storage_type": "postgresql"
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Failed to get memory summary: {e}")
+            return {"error": str(e)}
+    
     def update_memory(
         self,
         memory_id: int,
-        content: Union[str, Dict[str, Any]] = None,
-        title: str = None,
-        importance: float = None,
-        emotional_context: Dict[str, Any] = None,
-        add_tags: List[str] = None
+        content: Optional[Union[str, Dict[str, Any]]] = None,
+        title: Optional[str] = None,
+        importance: Optional[float] = None,
+        emotional_context: Optional[Dict[str, Any]] = None,
+        add_tags: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """Update an existing memory."""
-        if not POSTGRES_AVAILABLE:
+        if not POSTGRES_AVAILABLE or not self.connection_pool:
             return {"success": False, "error": "PostgreSQL not available"}
         
         try:
             update_fields = []
-            params = []
+            params: List[Any] = []
             
             if content is not None:
                 content_json = content if isinstance(content, dict) else {"text": content}
@@ -391,59 +460,9 @@ class MemorySystem:
             self.logger.error(f"Failed to update memory: {e}")
             return {"success": False, "error": str(e)}
     
-    def reflect_on_interaction(
-        self,
-        reflection_type: str,
-        content: Dict[str, Any],
-        mood_score: float = None
-    ) -> Dict[str, Any]:
-        """
-        Store an emotional reflection about an interaction.
-        
-        Args:
-            reflection_type: Type of reflection (e.g., 'collaboration', 'problem_solving', 'learning')
-            content: Reflection content with structured data
-            mood_score: Emotional state score (-1.0 to 1.0, negative to positive)
-        """
-        if not POSTGRES_AVAILABLE:
-            return {"success": False, "error": "PostgreSQL not available"}
-        
-        try:
-            insert_sql = """
-            INSERT INTO emotional_reflections (
-                session_id, project_id, reflection_type, content, mood_score
-            ) VALUES (%s, %s, %s, %s, %s)
-            RETURNING id, created_at;
-            """
-            
-            with self.connection_pool.getconn() as conn:
-                with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                    cur.execute(insert_sql, (
-                        self.session_id,
-                        self.current_project_id,
-                        reflection_type,
-                        Json(content),
-                        mood_score
-                    ))
-                    result = cur.fetchone()
-                conn.commit()
-                self.connection_pool.putconn(conn)
-            
-            self.logger.info(f"Stored emotional reflection: {reflection_type}")
-            
-            return {
-                "success": True,
-                "reflection_id": result['id'],
-                "created_at": result['created_at'].isoformat()
-            }
-            
-        except Exception as e:
-            self.logger.error(f"Failed to store reflection: {e}")
-            return {"success": False, "error": str(e)}
-    
     def get_emotional_insights(self, days_back: int = 30) -> Dict[str, Any]:
         """Get emotional insights and patterns from recent interactions."""
-        if not POSTGRES_AVAILABLE:
+        if not POSTGRES_AVAILABLE or not self.connection_pool:
             return {"error": "PostgreSQL not available"}
         
         try:
@@ -480,93 +499,9 @@ class MemorySystem:
             self.logger.error(f"Failed to get emotional insights: {e}")
             return {"error": str(e)}
     
-    def get_memory_summary(self) -> Dict[str, Any]:
-        """Get a summary of stored memories for the current project."""
-        if not POSTGRES_AVAILABLE:
-            return {
-                "total_memories": len(self.fallback_storage),
-                "storage_type": "fallback",
-                "project_id": self.current_project_id
-            }
-        
-        try:
-            summary_sql = """
-            SELECT 
-                memory_type,
-                COUNT(*) as count,
-                AVG(importance_score) as avg_importance,
-                MAX(created_at) as latest_memory
-            FROM memories
-            WHERE project_id = %s
-              AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
-            GROUP BY memory_type
-            ORDER BY count DESC;
-            """
-            
-            with self.connection_pool.getconn() as conn:
-                with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                    cur.execute(summary_sql, (self.current_project_id,))
-                    results = cur.fetchall()
-                self.connection_pool.putconn(conn)
-            
-            total_memories = sum(row['count'] for row in results)
-            
-            return {
-                "project_id": self.current_project_id,
-                "session_id": self.session_id,
-                "total_memories": total_memories,
-                "memory_types": [
-                    {
-                        "type": row['memory_type'],
-                        "count": row['count'],
-                        "avg_importance": float(row['avg_importance']),
-                        "latest": row['latest_memory'].isoformat()
-                    }
-                    for row in results
-                ],
-                "storage_type": "postgresql"
-            }
-            
-        except Exception as e:
-            self.logger.error(f"Failed to get memory summary: {e}")
-            return {"error": str(e)}
-    
-    # Fallback methods for when PostgreSQL is not available
-    def _store_memory_fallback(self, memory_type, content, title, importance):
-        """Fallback memory storage using in-memory dictionary."""
-        memory_id = len(self.fallback_storage) + 1
-        self.fallback_storage[memory_id] = {
-            "id": memory_id,
-            "project_id": self.current_project_id,
-            "memory_type": memory_type,
-            "title": title,
-            "content": content,
-            "importance": importance,
-            "created_at": datetime.now().isoformat()
-        }
-        return {
-            "success": True,
-            "memory_id": memory_id,
-            "storage_type": "fallback"
-        }
-    
-    def _recall_memories_fallback(self, query, memory_type, limit):
-        """Fallback memory recall using in-memory search."""
-        results = []
-        for memory in self.fallback_storage.values():
-            if memory_type and memory["memory_type"] != memory_type:
-                continue
-            if query and query.lower() not in str(memory["content"]).lower():
-                continue
-            results.append(memory)
-        
-        # Sort by importance and limit
-        results.sort(key=lambda x: x["importance"], reverse=True)
-        return results[:limit]
-    
     def cleanup_expired_memories(self) -> Dict[str, Any]:
         """Remove expired memories from the database."""
-        if not POSTGRES_AVAILABLE:
+        if not POSTGRES_AVAILABLE or not self.connection_pool:
             return {"success": False, "error": "PostgreSQL not available"}
         
         try:
@@ -594,8 +529,52 @@ class MemorySystem:
         except Exception as e:
             self.logger.error(f"Failed to cleanup memories: {e}")
             return {"success": False, "error": str(e)}
+
+    # Fallback methods for when PostgreSQL is not available
+    def _store_memory_fallback(
+        self, 
+        memory_type: str, 
+        content: Union[str, Dict[str, Any]], 
+        title: Optional[str], 
+        importance: float
+    ) -> Dict[str, Any]:
+        """Fallback memory storage using in-memory dictionary."""
+        memory_id = len(self.fallback_storage) + 1
+        self.fallback_storage[memory_id] = {
+            "id": memory_id,
+            "project_id": self.current_project_id,
+            "memory_type": memory_type,
+            "title": title,
+            "content": content,
+            "importance": importance,
+            "created_at": datetime.now().isoformat()
+        }
+        return {
+            "success": True,
+            "memory_id": memory_id,
+            "storage_type": "fallback"
+        }
     
-    def __del__(self):
+    def _recall_memories_fallback(
+        self, 
+        query: Optional[str], 
+        memory_type: Optional[str], 
+        limit: int
+    ) -> List[Dict[str, Any]]:
+        """Fallback memory recall using in-memory search."""
+        results = []
+        for memory in self.fallback_storage.values():
+            if memory_type and memory["memory_type"] != memory_type:
+                continue
+            if query and query.lower() not in str(memory["content"]).lower():
+                continue
+            results.append(memory)
+        
+        # Sort by importance and limit
+        results.sort(key=lambda x: x["importance"], reverse=True)
+        return results[:limit]
+    
+    def __del__(self) -> None:
         """Clean up database connections."""
         if self.connection_pool:
             self.connection_pool.closeall()

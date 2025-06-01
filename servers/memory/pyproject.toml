@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "biting-lip-mcp-memory"
+version = "1.0.0"
+description = "Biting Lip MCP Memory Server - AI Memory System Tools"
+authors = [
+    {name = "Biting Lip AI", email = "info@bitinglip.ai"}
+]
+dependencies = [
+    "psycopg2-binary>=2.9.0",
+    "python-dotenv>=1.0.0",
+    "numpy>=1.21.0",
+]
+
+[project.scripts]
+biting-lip-mcp-memory = "server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]

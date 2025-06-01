@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Union
 from pathlib import Path
 import asyncio
 import logging
+import contextlib
 
 try:
     import psycopg2
@@ -21,6 +22,10 @@ try:
     import psycopg2.pool
     POSTGRES_AVAILABLE = True
 except ImportError:
+    # Create dummy classes for type hints when psycopg2 is not available
+    psycopg2 = None
+    RealDictCursor = None
+    Json = None
     POSTGRES_AVAILABLE = False
     logging.warning("psycopg2 not available. Memory system will use fallback storage.")
 
@@ -37,8 +42,7 @@ class MemorySystem:
     - Memory importance scoring
     - Temporal relationship tracking    """
     
-    def __init__(self, project_root: Optional[str] = None):
-        # Logging setup first
+    def __init__(self, project_root: Optional[str] = None):        # Logging setup first
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
         
@@ -46,7 +50,8 @@ class MemorySystem:
         self.current_project_id = self._detect_project_id()
         self.session_id = self._generate_session_id()
         
-        # Database configuration        self.db_config = self._load_db_config()
+        # Database configuration
+        self.db_config = self._load_db_config()
         self.connection_pool: Optional[Any] = None
         self.fallback_storage: Dict[int, Dict[str, Any]] = {}
         
@@ -105,7 +110,7 @@ class MemorySystem:
     
     def _detect_project_id(self) -> str:
         """Detect current project based on directory structure and git repo."""
-        try:
+        with contextlib.suppress(Exception):
             # Try to get git repo name
             if os.path.exists(os.path.join(self.project_root, '.git')):
                 import subprocess
@@ -118,8 +123,6 @@ class MemorySystem:
                 if result.returncode == 0:
                     repo_url = result.stdout.strip()
                     return repo_url.split('/')[-1].replace('.git', '')
-        except Exception:
-            pass
         
         # Fallback to directory name
         return Path(self.project_root).name
@@ -132,74 +135,77 @@ class MemorySystem:
     
     def _initialize_database(self) -> None:
         """Initialize PostgreSQL database and tables."""
-        if not POSTGRES_AVAILABLE:
+        if not POSTGRES_AVAILABLE or not psycopg2:
             self.logger.warning("Using fallback memory storage - install psycopg2 for full functionality")
             return
         
         try:
             # Create connection pool
-            if POSTGRES_AVAILABLE:
-                self.connection_pool = psycopg2.pool.ThreadedConnectionPool(
-                    1, 20,  # min and max connections
-                    **self.db_config
-                )
-                
-                # Create tables if they don't exist
-                self._create_tables()
+            self.connection_pool = psycopg2.pool.ThreadedConnectionPool(
+                1, 20,  # min and max connections
+                **self.db_config
+            )
+            
+            # Create tables if they don't exist
+            self._create_tables()
             
         except Exception as e:
             self.logger.error(f"Failed to initialize PostgreSQL: {e}")
             self.logger.info("Falling back to in-memory storage")
     
+    def _safe_json(self, data: Any) -> Any:
+        """Safely convert data to JSON format for database storage."""
+        return Json(data) if (POSTGRES_AVAILABLE and Json) else data
+    
     def _create_tables(self) -> None:
         """Create necessary database tables."""
-        create_sql = """
-        CREATE EXTENSION IF NOT EXISTS vector;
-        
-        CREATE TABLE IF NOT EXISTS memories (
-            id SERIAL PRIMARY KEY,
-            project_id VARCHAR(255) NOT NULL,
-            session_id VARCHAR(255) NOT NULL,
-            memory_type VARCHAR(100) NOT NULL,
-            title VARCHAR(500),
-            content JSONB NOT NULL,
-            importance_score FLOAT DEFAULT 0.5,
-            emotional_context JSONB DEFAULT '{}',
-            tags TEXT[],
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            expires_at TIMESTAMP,
-            embedding VECTOR(384)
-        );
-        
-        CREATE TABLE IF NOT EXISTS memory_relationships (
-            id SERIAL PRIMARY KEY,
-            source_memory_id INTEGER REFERENCES memories(id),
-            target_memory_id INTEGER REFERENCES memories(id),
-            relationship_type VARCHAR(100),
-            strength FLOAT DEFAULT 0.5,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        
-        CREATE TABLE IF NOT EXISTS emotional_reflections (
-            id SERIAL PRIMARY KEY,
-            session_id VARCHAR(255) NOT NULL,
-            project_id VARCHAR(255) NOT NULL,
-            reflection_type VARCHAR(100),
-            content JSONB NOT NULL,
-            mood_score FLOAT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        
-        -- Indexes for performance
-        CREATE INDEX IF NOT EXISTS idx_memories_project_session ON memories(project_id, session_id);
-        CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(memory_type);
-        CREATE INDEX IF NOT EXISTS idx_memories_importance ON memories(importance_score DESC);
-        CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at DESC);
-        CREATE INDEX IF NOT EXISTS idx_memories_content_gin ON memories USING GIN(content);
-        """
-        
         if self.connection_pool:
+            create_sql = """
+            CREATE EXTENSION IF NOT EXISTS vector;
+            
+            CREATE TABLE IF NOT EXISTS memories (
+                id SERIAL PRIMARY KEY,
+                project_id VARCHAR(255) NOT NULL,
+                session_id VARCHAR(255) NOT NULL,
+                memory_type VARCHAR(100) NOT NULL,
+                title VARCHAR(500),
+                content JSONB NOT NULL,
+                importance_score FLOAT DEFAULT 0.5,
+                emotional_context JSONB DEFAULT '{}',
+                tags TEXT[],
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP,
+                embedding VECTOR(384)
+            );
+            
+            CREATE TABLE IF NOT EXISTS memory_relationships (
+                id SERIAL PRIMARY KEY,
+                source_memory_id INTEGER REFERENCES memories(id),
+                target_memory_id INTEGER REFERENCES memories(id),
+                relationship_type VARCHAR(100),
+                strength FLOAT DEFAULT 0.5,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            
+            CREATE TABLE IF NOT EXISTS emotional_reflections (
+                id SERIAL PRIMARY KEY,
+                session_id VARCHAR(255) NOT NULL,
+                project_id VARCHAR(255) NOT NULL,
+                reflection_type VARCHAR(100),
+                content JSONB NOT NULL,
+                mood_score FLOAT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            
+            -- Indexes for performance
+            CREATE INDEX IF NOT EXISTS idx_memories_project_session ON memories(project_id, session_id);
+            CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(memory_type);
+            CREATE INDEX IF NOT EXISTS idx_memories_importance ON memories(importance_score DESC);
+            CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_memories_content_gin ON memories USING GIN(content);
+            """
+            
             with self.connection_pool.getconn() as conn:
                 with conn.cursor() as cur:
                     cur.execute(create_sql)
@@ -245,9 +251,9 @@ class MemorySystem:
                         self.session_id,
                         memory_type,
                         title,
-                        Json(content_json),
+                        self._safe_json(content_json),
                         importance,
-                        Json(emotional_context),
+                        self._safe_json(emotional_context),
                         tags,
                         expires_at
                     ))
@@ -361,7 +367,7 @@ class MemorySystem:
                         self.session_id,
                         self.current_project_id,
                         reflection_type,
-                        Json(content),
+                        self._safe_json(content),
                         mood_score
                     ))
                     result = cur.fetchone()
@@ -451,7 +457,7 @@ class MemorySystem:
             if content is not None:
                 content_json = content if isinstance(content, dict) else {"text": content}
                 update_fields.append("content = %s")
-                params.append(Json(content_json))
+                params.append(self._safe_json(content_json))
             
             if title is not None:
                 update_fields.append("title = %s")
@@ -463,7 +469,7 @@ class MemorySystem:
             
             if emotional_context is not None:
                 update_fields.append("emotional_context = %s")
-                params.append(Json(emotional_context))
+                params.append(self._safe_json(emotional_context))
             
             if add_tags:
                 update_fields.append("tags = array_cat(tags, %s)")
@@ -524,15 +530,13 @@ class MemorySystem:
                     results = cur.fetchall()
                 self.connection_pool.putconn(conn)
             
-            insights = {
+            return {
                 "session_id": self.session_id,
                 "project_id": self.current_project_id,
                 "analysis_period_days": days_back,
                 "reflection_patterns": [dict(row) for row in results],
                 "overall_mood": sum(row['avg_mood'] or 0 for row in results) / len(results) if results else 0
             }
-            
-            return insights
             
         except Exception as e:
             self.logger.error(f"Failed to get emotional insights: {e}")

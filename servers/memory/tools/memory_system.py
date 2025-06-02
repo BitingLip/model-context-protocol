@@ -69,17 +69,14 @@ class MemorySystem:
         database = os.getenv('MEMORY_DB_NAME', 'ai_memory')
         user = os.getenv('MEMORY_DB_USER')
         password = os.getenv('MEMORY_DB_PASSWORD')
-        
-        # Validate required credentials are provided
+          # Validate required credentials are provided
         if not user or not password:
             self.logger.error("Database credentials not found in environment variables or config file")
-            self.logger.info("Please set MEMORY_DB_USER and MEMORY_DB_PASSWORD in config/services/mcp-memory.env")
+            self.logger.info("Please set MEMORY_DB_USER and MEMORY_DB_PASSWORD in interfaces/model-context-protocol/config/mcp-memory.env")
             raise ValueError("Database credentials required but not provided")
         
-        return {            'host': host,
-            'port': port,
-            'database': database,
-            'user': user,
+        return {            'host': host,            'port': port,
+            'database': database,            'user': user,
             'password': password,
         }
     
@@ -89,7 +86,9 @@ class MemorySystem:
             # Find the project root (5 levels up from this file)
             current_file = Path(__file__).resolve()
             project_root = current_file.parent.parent.parent.parent.parent.parent
-            env_file = project_root / "config" / "services" / "mcp-memory.env"
+            
+            # Look only in the new location in interfaces/model-context-protocol/config
+            env_file = project_root / "interfaces" / "model-context-protocol" / "config" / "mcp-memory.env"
             
             if env_file.exists():
                 # Simple .env file parser

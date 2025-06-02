@@ -29,25 +29,59 @@ except ImportError:
     POSTGRES_AVAILABLE = False
     logging.warning("psycopg2 not available. Memory system will use fallback storage.")
 
+# Embedding generation support
+try:
+    from sentence_transformers import SentenceTransformer
+    EMBEDDING_AVAILABLE = True
+except ImportError:
+    SentenceTransformer = None
+    EMBEDDING_AVAILABLE = False
+    logging.warning("sentence-transformers not available. Semantic search will use fallback text matching.")
+
+try:
+    import numpy as np
+    NUMPY_AVAILABLE = True
+except ImportError:
+    np = None
+    NUMPY_AVAILABLE = False
+
 
 class MemorySystem:
     """
-    PostgreSQL-based memory system for AI assistants.
+    PostgreSQL-based memory system for AI assistants with semantic search capabilities.
     
     Features:
     - Project-aware memory storage
     - Emotional context tracking
-    - Semantic search capabilities
-    - Automatic backup and recovery
+    - Semantic search using pgvector embeddings
+    - Automatic embedding generation
+    - pgvectorscale optimization support
     - Memory importance scoring
-    - Temporal relationship tracking    """
+    - Temporal relationship tracking
+    """
     
-    def __init__(self, project_root: Optional[str] = None):        # Logging setup first
+    def __init__(self, project_root: Optional[str] = None, embedding_model: str = "all-MiniLM-L6-v2"):
+        # Logging setup first
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
         
         self.project_root = project_root or os.getcwd()
         self.current_project_id = self._detect_project_id()
+          # Initialize embedding model if available
+        self.embedding_model = None
+        self.embedding_dim = 384  # Default for all-MiniLM-L6-v2
+        if EMBEDDING_AVAILABLE and SentenceTransformer:
+            try:
+                self.embedding_model = SentenceTransformer(embedding_model)
+                self.embedding_dim = self.embedding_model.get_sentence_embedding_dimension()
+                self.logger.info(f"Loaded embedding model: {embedding_model} (dim: {self.embedding_dim})")
+            except Exception as e:
+                self.logger.warning(f"Failed to load embedding model: {e}")
+                self.embedding_model = None
+        else:
+            self.logger.warning("Semantic search disabled - install sentence-transformers for full functionality")
+        
+        # Session management
         self.session_id = self._generate_session_id()
         
         # Database configuration
@@ -276,12 +310,18 @@ class MemorySystem:
             if expires_in_days:
                 expires_at = datetime.now() + timedelta(days=expires_in_days)
             
+            # Generate embedding for content
+            content_text = self._prepare_content_for_embedding(content_json)
+            if title:
+                content_text = f"{title}: {content_text}"
+            embedding = self._generate_embedding(content_text)
+            
             # Store in database
             insert_sql = """
             INSERT INTO memories (
                 project_id, session_id, memory_type, title, content,
-                importance_score, emotional_context, tags, expires_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                importance_score, emotional_context, tags, expires_at, embedding
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id, created_at;
             """
             
@@ -296,13 +336,15 @@ class MemorySystem:
                         importance,
                         self._safe_json(emotional_context),
                         tags,
-                        expires_at
+                        expires_at,
+                        embedding
                     ))
                     result = cur.fetchone()
                 conn.commit()
                 self.connection_pool.putconn(conn)
             
-            self.logger.info(f"Stored memory: {memory_type} - {title or 'Untitled'}")
+            embedding_status = "with embedding" if embedding else "without embedding"
+            self.logger.info(f"Stored memory: {memory_type} - {title or 'Untitled'} ({embedding_status})")
             
             return {
                 "success": True,
@@ -325,12 +367,12 @@ class MemorySystem:
         limit: int = 10,
         include_other_projects: bool = False
     ) -> List[Dict[str, Any]]:
-        """Recall relevant memories based on query and filters."""
+        """Recall relevant memories based on query and filters with semantic search."""
         if not POSTGRES_AVAILABLE or not self.connection_pool:
             return self._recall_memories_fallback(query, memory_type, limit)
         
         try:
-            # Build dynamic query
+            # Build base conditions
             where_conditions = ["importance_score >= %s"]
             params: List[Any] = [importance_threshold]
             
@@ -342,26 +384,62 @@ class MemorySystem:
                 where_conditions.append("memory_type = %s")
                 params.append(memory_type)
             
-            if query:
-                # Full-text search on content
-                where_conditions.append("content::text ILIKE %s")
-                params.append(f"%{query}%")
-            
             # Add expiration check
             where_conditions.append("(expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)")
             
-            search_sql = f"""
-            SELECT 
-                id, project_id, session_id, memory_type, title,
-                content, importance_score, emotional_context, tags,
-                created_at, updated_at
-            FROM memories
-            WHERE {' AND '.join(where_conditions)}
-            ORDER BY importance_score DESC, created_at DESC
-            LIMIT %s;
-            """
-            params.append(limit)
-            
+            # Choose search strategy based on query and embedding availability
+            if query and self.embedding_model:
+                # Semantic search using vector similarity
+                query_embedding = self._generate_embedding(query)
+                if query_embedding:
+                    search_sql = f"""
+                    SELECT 
+                        id, project_id, session_id, memory_type, title,
+                        content, importance_score, emotional_context, tags,
+                        created_at, updated_at,
+                        (1 - (embedding <=> %s)) * importance_score as relevance_score
+                    FROM memories
+                    WHERE {' AND '.join(where_conditions)}
+                        AND embedding IS NOT NULL
+                    ORDER BY relevance_score DESC, created_at DESC
+                    LIMIT %s;
+                    """
+                    params.insert(-1, query_embedding)  # Insert before limit
+                    params.append(limit)
+                    
+                    self.logger.info(f"Using semantic search for query: '{query}'")
+                else:
+                    # Fallback to text search
+                    where_conditions.append("content::text ILIKE %s")
+                    params.insert(-1, f"%{query}%")
+                    search_sql = f"""
+                    SELECT 
+                        id, project_id, session_id, memory_type, title,
+                        content, importance_score, emotional_context, tags,
+                        created_at, updated_at
+                    FROM memories
+                    WHERE {' AND '.join(where_conditions)}
+                    ORDER BY importance_score DESC, created_at DESC
+                    LIMIT %s;
+                    """
+                    params.append(limit)
+                    self.logger.info(f"Using text search fallback for query: '{query}'")
+            else:
+                # No query or no embedding model - basic retrieval
+                search_sql = f"""
+                SELECT 
+                    id, project_id, session_id, memory_type, title,
+                    content, importance_score, emotional_context, tags,
+                    created_at, updated_at
+                FROM memories                WHERE {' AND '.join(where_conditions)}
+                ORDER BY importance_score DESC, created_at DESC
+                LIMIT %s;
+                """
+                params.append(limit)
+                
+                if query:
+                    self.logger.info("Embedding model not available, returning recent memories")
+                
             with self.connection_pool.getconn() as conn:
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
                     cur.execute(search_sql, params)
@@ -375,9 +453,13 @@ class MemorySystem:
                 memory['created_at'] = memory['created_at'].isoformat()
                 if memory['updated_at']:
                     memory['updated_at'] = memory['updated_at'].isoformat()
+                # Include relevance score if available
+                if 'relevance_score' in memory:
+                    memory['relevance_score'] = float(memory['relevance_score']) if memory['relevance_score'] else 0.0
                 memories.append(memory)
             
-            self.logger.info(f"Recalled {len(memories)} memories for query: {query}")
+            search_type = "semantic" if query and self.embedding_model else "standard"
+            self.logger.info(f"Recalled {len(memories)} memories using {search_type} search")
             return memories
             
         except Exception as e:
@@ -1111,7 +1193,117 @@ class MemorySystem:
             self.logger.error(f"Failed to get persona evolution summary: {e}")
             return {"error": str(e)}
 
-    def __del__(self) -> None:
+    def _del__(self) -> None:
         """Clean up database connections."""
         if self.connection_pool:
             self.connection_pool.closeall()
+
+    def _generate_embedding(self, text: str) -> Optional[List[float]]:
+        """Generate embedding vector for text content."""
+        if not self.embedding_model or not EMBEDDING_AVAILABLE:
+            return None
+        
+        try:
+            # Extract text content if it's structured
+            if isinstance(text, dict):
+                # Combine all text fields for embedding
+                text_parts = []
+                for key, value in text.items():
+                    if isinstance(value, str):
+                        text_parts.append(f"{key}: {value}")
+                    elif isinstance(value, (list, dict)):
+                        text_parts.append(f"{key}: {str(value)}")
+                text = " ".join(text_parts)
+              # Generate embedding
+            embedding = self.embedding_model.encode(text, convert_to_tensor=False)
+            
+            # Convert to list ensuring proper float type
+            if NUMPY_AVAILABLE and hasattr(embedding, 'tolist'):
+                return [float(x) for x in embedding.tolist()]
+            elif hasattr(embedding, 'cpu'):
+                return [float(x) for x in embedding.cpu().numpy().tolist()]
+            elif hasattr(embedding, 'tolist'):
+                return [float(x) for x in embedding.tolist()]
+            else:
+                return [float(x) for x in list(embedding)]
+                
+        except Exception as e:
+            self.logger.warning(f"Failed to generate embedding: {e}")
+            return None
+    
+    def _prepare_content_for_embedding(self, content: Union[str, Dict[str, Any]]) -> str:
+        """Prepare content for embedding generation."""
+        if isinstance(content, str):
+            return content
+        elif isinstance(content, dict):
+            # Extract text content from structured data
+            text_parts = []
+            
+            # Handle common content structures
+            if 'text' in content:
+                text_parts.append(content['text'])
+            if 'description' in content:
+                text_parts.append(content['description'])
+            if 'summary' in content:
+                text_parts.append(content['summary'])
+            if 'title' in content:
+                text_parts.append(content['title'])
+                
+            # Include other string values
+            for key, value in content.items():
+                if key not in ['text', 'description', 'summary', 'title'] and isinstance(value, str):
+                    text_parts.append(f"{key}: {value}")
+                    
+            return " ".join(text_parts) if text_parts else str(content)
+        else:
+            return str(content)
+    
+    def update_embeddings_for_existing_memories(self, batch_size: int = 10) -> Dict[str, Any]:
+        """Update embeddings for existing memories that don't have them."""
+        if not POSTGRES_AVAILABLE or not self.connection_pool or not self.embedding_model:
+            return {"success": False, "error": "PostgreSQL or embedding model not available"}
+        
+        try:
+            # Find memories without embeddings
+            with self.connection_pool.getconn() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute("""
+                        SELECT id, content, title 
+                        FROM memories 
+                        WHERE embedding IS NULL 
+                        ORDER BY created_at DESC 
+                        LIMIT %s
+                    """, (batch_size,))
+                    memories = cur.fetchall()
+                self.connection_pool.putconn(conn)
+            
+            if not memories:
+                return {"success": True, "updated": 0, "message": "All memories already have embeddings"}
+            
+            updated_count = 0
+            for memory in memories:
+                # Generate embedding for content
+                content_text = self._prepare_content_for_embedding(memory['content'])
+                if memory['title']:
+                    content_text = f"{memory['title']}: {content_text}"
+                
+                embedding = self._generate_embedding(content_text)
+                if embedding:
+                    # Update memory with embedding
+                    with self.connection_pool.getconn() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute("""
+                                UPDATE memories 
+                                SET embedding = %s, updated_at = CURRENT_TIMESTAMP 
+                                WHERE id = %s
+                            """, (embedding, memory['id']))
+                        conn.commit()
+                        self.connection_pool.putconn(conn)
+                    updated_count += 1
+            
+            self.logger.info(f"Updated embeddings for {updated_count} memories")
+            return {"success": True, "updated": updated_count}
+            
+        except Exception as e:
+            self.logger.error(f"Failed to update embeddings: {e}")
+            return {"success": False, "error": str(e)}

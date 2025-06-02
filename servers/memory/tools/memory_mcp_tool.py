@@ -274,7 +274,22 @@ class MemoryMCPTool:
             }
         except Exception as e:
             return {"error": f"Failed to get project context: {e}"}
-
+    
+    def update_embeddings_for_existing_memories(self, **kwargs) -> Dict[str, Any]:
+        """
+        Update embeddings for existing memories that don't have them.
+        
+        Args:
+            batch_size (int, optional): Number of memories to process at once, default 10
+        
+        Returns:
+            Dictionary with update statistics (processed, updated, skipped, errors)
+        """
+        try:
+            return self.memory_system.update_embeddings_for_existing_memories(**kwargs)
+        except Exception as e:
+            return {"success": False, "error": f"Failed to update embeddings: {e}"}
+    
 
 # Tool function implementations for MCP server integration
 def create_memory_tools(project_root: str) -> Dict[str, Any]:
@@ -342,6 +357,10 @@ def create_memory_tools(project_root: str) -> Dict[str, Any]:
         """Get persona evolution summary."""
         return memory_tool.get_persona_evolution_summary(**kwargs)
     
+    async def _update_embeddings_for_existing_memories(**kwargs):
+        """Update embeddings for existing memories."""
+        return memory_tool.update_embeddings_for_existing_memories(**kwargs)
+    
     return {
         "store_memory": _store_memory,
         "recall_memories": _recall_memories,
@@ -357,4 +376,5 @@ def create_memory_tools(project_root: str) -> Dict[str, Any]:
         "get_memory_summary": _get_memory_summary,
         "cleanup_expired_memories": _cleanup_expired_memories,
         "get_project_context": _get_project_context,
+        "update_embeddings_for_existing_memories": _update_embeddings_for_existing_memories,
     }

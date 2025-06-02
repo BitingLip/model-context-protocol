@@ -1,0 +1,9 @@
+mcp>=0.1.0
+PyYAML>=6.0
+psycopg2-binary>=2.9.0
+sentence-transformers>=2.0.0
+numpy>=1.21.0
+
+# Optional but recommended for enhanced performance
+# pgvectorscale - requires PostgreSQL extension installation
+# pgai - requires PostgreSQL extension installation

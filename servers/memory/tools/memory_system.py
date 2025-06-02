@@ -386,9 +386,14 @@ class MemorySystem:
             # Add expiration check
             where_conditions.append("(expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)")
             
+            # Initialize variables for parameter handling
+            execution_params = params
+            search_sql = ""
+            query_embedding = None  # Initialize to avoid unbound variable
+            
             # Choose search strategy based on query and embedding availability
             if query and self.embedding_model:
-                # Semantic search using vector similarity
+                # Try semantic search using vector similarity
                 query_embedding = self._generate_embedding(query)
                 if query_embedding:
                     search_sql = f"""
@@ -403,14 +408,13 @@ class MemorySystem:
                     ORDER BY relevance_score DESC, created_at DESC
                     LIMIT %s;
                     """
-                    params.insert(-1, query_embedding)  # Insert before limit
-                    params.append(limit)
-                    
+                    # Parameters: where_conditions params + embedding + limit
+                    execution_params = params + [query_embedding, limit]
                     self.logger.info(f"Using semantic search for query: '{query}'")
                 else:
                     # Fallback to text search
                     where_conditions.append("content::text ILIKE %s")
-                    params.insert(-1, f"%{query}%")
+                    params.append(f"%{query}%")
                     search_sql = f"""
                     SELECT 
                         id, project_id, session_id, memory_type, title,
@@ -422,6 +426,7 @@ class MemorySystem:
                     LIMIT %s;
                     """
                     params.append(limit)
+                    execution_params = params
                     self.logger.info(f"Using text search fallback for query: '{query}'")
             else:
                 # No query or no embedding model - basic retrieval
@@ -430,18 +435,21 @@ class MemorySystem:
                     id, project_id, session_id, memory_type, title,
                     content, importance_score, emotional_context, tags,
                     created_at, updated_at
-                FROM memories                WHERE {' AND '.join(where_conditions)}
+                FROM memories
+                WHERE {' AND '.join(where_conditions)}
                 ORDER BY importance_score DESC, created_at DESC
                 LIMIT %s;
                 """
                 params.append(limit)
+                execution_params = params
                 
                 if query:
                     self.logger.info("Embedding model not available, returning recent memories")
-                
+                    
+            # Execute the query
             with self.connection_pool.getconn() as conn:
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                    cur.execute(search_sql, params)
+                    cur.execute(search_sql, execution_params)
                     results = cur.fetchall()
                 self.connection_pool.putconn(conn)
             
@@ -457,7 +465,8 @@ class MemorySystem:
                     memory['relevance_score'] = float(memory['relevance_score']) if memory['relevance_score'] else 0.0
                 memories.append(memory)
             
-            search_type = "semantic" if query and self.embedding_model else "standard"
+            # Fixed the variable reference issue
+            search_type = "semantic" if query and self.embedding_model and query_embedding is not None else "standard"
             self.logger.info(f"Recalled {len(memories)} memories using {search_type} search")
             return memories
             
@@ -858,9 +867,8 @@ class MemorySystem:
             with self.connection_pool.getconn() as conn:
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
                     cur.execute(check_sql, (ai_instance_id, persona_type, attribute_name))
-                    existing = cur.fetchone()
                     
-                    if existing:
+                    if existing := cur.fetchone():
                         # Update existing persona memory with growth tracking
                         old_trajectory = existing['growth_trajectory'] or []
                         new_trajectory = old_trajectory + [{
@@ -1104,38 +1112,8 @@ class MemorySystem:
         if not POSTGRES_AVAILABLE or not self.connection_pool:
             return {"error": "PostgreSQL not available"}
         
-        try:            # Get persona changes over time
-            if persona_type:
-                evolution_sql = """
-                SELECT 
-                    persona_type,
-                    attribute_name,
-                    current_value,
-                    confidence_score,
-                    growth_trajectory,
-                    first_observed,
-                    last_updated
-                FROM persona_memories 
-                WHERE first_observed >= CURRENT_TIMESTAMP - INTERVAL %s
-                    AND persona_type = %s
-                ORDER BY persona_type, attribute_name, last_updated DESC;
-                """
-                params = (f"{days_back} days", persona_type)
-            else:
-                evolution_sql = """
-                SELECT 
-                    persona_type,
-                    attribute_name,
-                    current_value,
-                    confidence_score,
-                    growth_trajectory,
-                    first_observed,
-                    last_updated
-                FROM persona_memories 
-                WHERE first_observed >= CURRENT_TIMESTAMP - INTERVAL %s
-                ORDER BY persona_type, attribute_name, last_updated DESC;
-                """
-                params = (f"{days_back} days",)
+        try:
+            evolution_sql, params = self._get_persona_evolution_sql_and_params(days_back, persona_type)
             
             with self.connection_pool.getconn() as conn:
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -1191,6 +1169,41 @@ class MemorySystem:
         except Exception as e:
             self.logger.error(f"Failed to get persona evolution summary: {e}")
             return {"error": str(e)}
+
+    def _get_persona_evolution_sql_and_params(self, days_back: int, persona_type: Optional[str] = None):
+        """Helper to get SQL and params for persona evolution summary."""
+        if persona_type:
+            evolution_sql = """
+            SELECT 
+                persona_type,
+                attribute_name,
+                current_value,
+                confidence_score,
+                growth_trajectory,
+                first_observed,
+                last_updated
+            FROM persona_memories 
+            WHERE first_observed >= CURRENT_TIMESTAMP - INTERVAL %s
+                AND persona_type = %s
+            ORDER BY persona_type, attribute_name, last_updated DESC;
+            """
+            params = (f"{days_back} days", persona_type)
+        else:
+            evolution_sql = """
+            SELECT 
+                persona_type,
+                attribute_name,
+                current_value,
+                confidence_score,
+                growth_trajectory,
+                first_observed,
+                last_updated
+            FROM persona_memories 
+            WHERE first_observed >= CURRENT_TIMESTAMP - INTERVAL %s
+            ORDER BY persona_type, attribute_name, last_updated DESC;
+            """
+            params = (f"{days_back} days",)
+        return evolution_sql, params
 
     def _del__(self) -> None:
         """Clean up database connections."""
@@ -1257,35 +1270,38 @@ class MemorySystem:
         else:
             return str(content)
     
+    def _get_memories_without_embeddings(self, batch_size: int) -> List[Dict[str, Any]]:
+        """Helper to retrieve memories without embeddings."""
+        if not self.connection_pool:
+            return []
+        with self.connection_pool.getconn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT id, content, title 
+                    FROM memories 
+                    WHERE embedding IS NULL 
+                    ORDER BY created_at DESC 
+                    LIMIT %s
+                """, (batch_size,))
+                memories = cur.fetchall()
+            self.connection_pool.putconn(conn)
+        return memories
     def update_embeddings_for_existing_memories(self, batch_size: int = 10) -> Dict[str, Any]:
         """Update embeddings for existing memories that don't have them."""
         if not POSTGRES_AVAILABLE or not self.connection_pool or not self.embedding_model:
             return {"success": False, "error": "PostgreSQL or embedding model not available"}
-        
+
         try:
-            # Find memories without embeddings
-            with self.connection_pool.getconn() as conn:
-                with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                    cur.execute("""
-                        SELECT id, content, title 
-                        FROM memories 
-                        WHERE embedding IS NULL 
-                        ORDER BY created_at DESC 
-                        LIMIT %s
-                    """, (batch_size,))
-                    memories = cur.fetchall()
-                self.connection_pool.putconn(conn)
-            
-            if not memories:
+            if not (memories := self._get_memories_without_embeddings(batch_size)):
                 return {"success": True, "updated": 0, "message": "All memories already have embeddings"}
-            
+
             updated_count = 0
             for memory in memories:
                 # Generate embedding for content
                 content_text = self._prepare_content_for_embedding(memory['content'])
                 if memory['title']:
                     content_text = f"{memory['title']}: {content_text}"
-                
+
                 embedding = self._generate_embedding(content_text)
                 if embedding:
                     # Update memory with embedding
@@ -1299,10 +1315,10 @@ class MemorySystem:
                         conn.commit()
                         self.connection_pool.putconn(conn)
                     updated_count += 1
-            
+
             self.logger.info(f"Updated embeddings for {updated_count} memories")
             return {"success": True, "updated": updated_count}
-            
+
         except Exception as e:
             self.logger.error(f"Failed to update embeddings: {e}")
             return {"success": False, "error": str(e)}

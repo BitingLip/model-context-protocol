@@ -19,7 +19,34 @@ import contextlib
 try:
     import psycopg2
     from psycopg2.extras import RealDictCursor, Json
+    from psycopg2.extensions import AsIs
     import psycopg2.pool
+    import psycopg2.extensions
+    
+    # Import numpy for adapter
+    try:
+        import numpy as np
+    except ImportError:
+        np = None
+
+    def _adapt_vector(val):
+        """
+        Convert a Python list or NumPy array into a pgvector-literal string.
+        E.g. [0.1,0.2,…] → "'[0.1,0.2,…]'::vector"
+        """
+        # If it's already a NumPy array, convert to list
+        arr = val.tolist() if np and isinstance(val, np.ndarray) else list(val)
+        # Build a comma-separated string from floats
+        inner = ",".join(str(float(x)) for x in arr)
+        # Wrap in single quotes and append ::vector
+        literal = f"'[{inner}]'::vector"
+        return AsIs(literal)
+
+    # Register adapters for list and (if available) numpy.ndarray
+    psycopg2.extensions.register_adapter(list, _adapt_vector)
+    if np:
+        psycopg2.extensions.register_adapter(np.ndarray, _adapt_vector)
+
     POSTGRES_AVAILABLE = True
 except ImportError:
     # Create dummy classes for type hints when psycopg2 is not available
@@ -83,8 +110,7 @@ class MemorySystem:
         
         # Session management
         self.session_id = self._generate_session_id()
-        
-        # Database configuration
+          # Database configuration
         self.db_config = self._load_db_config()
         self.connection_pool: Optional[Any] = None
         self.fallback_storage: Dict[int, Dict[str, Any]] = {}
@@ -351,8 +377,7 @@ class MemorySystem:
                 "created_at": result['created_at'].isoformat(),
                 "project_id": self.current_project_id,
                 "session_id": self.session_id
-            }
-            
+            }            
         except Exception as e:
             self.logger.error(f"Failed to store memory: {e}")
             return {"success": False, "error": str(e)}
@@ -370,6 +395,8 @@ class MemorySystem:
         if not POSTGRES_AVAILABLE or not self.connection_pool:
             return self._recall_memories_fallback(query, memory_type, limit)
         
+        self.logger.info(f"Starting recall_memories: query='{query}', memory_type={memory_type}, limit={limit}")
+        
         try:
             # Build base conditions
             where_conditions = ["importance_score >= %s"]
@@ -382,39 +409,35 @@ class MemorySystem:
             if memory_type:
                 where_conditions.append("memory_type = %s")
                 params.append(memory_type)
-            
-            # Add expiration check
+              # Add expiration check
             where_conditions.append("(expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)")
-            
-            # Initialize variables for parameter handling
-            execution_params = params
-            search_sql = ""
-            query_embedding = None  # Initialize to avoid unbound variable
+            self.logger.debug(f"Base conditions: {where_conditions}, params: {params}")
             
             # Choose search strategy based on query and embedding availability
-            if query and self.embedding_model:
-                # Try semantic search using vector similarity
+            if query and self.embedding_model:                # Generate embedding (Python list) for the query text
                 query_embedding = self._generate_embedding(query)
                 if query_embedding:
+                    # Semantic search: embedding parameter goes FIRST (matches SQL order)
                     search_sql = f"""
                     SELECT 
                         id, project_id, session_id, memory_type, title,
                         content, importance_score, emotional_context, tags,
                         created_at, updated_at,
-                        (1 - (embedding <=> %s)) * importance_score as relevance_score
+                        (1 - (embedding <=> %s)) * importance_score AS relevance_score
                     FROM memories
                     WHERE {' AND '.join(where_conditions)}
-                        AND embedding IS NOT NULL
+                      AND embedding IS NOT NULL
                     ORDER BY relevance_score DESC, created_at DESC
                     LIMIT %s;
                     """
-                    # Parameters: where_conditions params + embedding + limit
-                    execution_params = params + [query_embedding, limit]
+                    # CRITICAL: Parameters must match SQL order: embedding (in SELECT), base WHERE params, limit
+                    execution_params = [query_embedding] + params + [limit]
                     self.logger.info(f"Using semantic search for query: '{query}'")
                 else:
-                    # Fallback to text search
-                    where_conditions.append("content::text ILIKE %s")
-                    params.append(f"%{query}%")
+                    # If embedding generation failed, fall back to text search
+                    where_conditions.append("(content::text ILIKE %s OR title ILIKE %s)")
+                    search_param = f"%{query}%"
+                    params.extend([search_param, search_param])
                     search_sql = f"""
                     SELECT 
                         id, project_id, session_id, memory_type, title,
@@ -428,8 +451,14 @@ class MemorySystem:
                     params.append(limit)
                     execution_params = params
                     self.logger.info(f"Using text search fallback for query: '{query}'")
-            else:
-                # No query or no embedding model - basic retrieval
+                    
+            elif query:
+                # Query provided but no embedding model - use text search
+                self.logger.info("No embedding model available, using text search")
+                where_conditions.append("(content::text ILIKE %s OR title ILIKE %s)")
+                search_param = f"%{query}%"
+                params.extend([search_param, search_param])
+                
                 search_sql = f"""
                 SELECT 
                     id, project_id, session_id, memory_type, title,
@@ -440,17 +469,39 @@ class MemorySystem:
                 ORDER BY importance_score DESC, created_at DESC
                 LIMIT %s;
                 """
+                
                 params.append(limit)
                 execution_params = params
                 
-                if query:
-                    self.logger.info("Embedding model not available, returning recent memories")
-                    
+            else:
+                # No query - basic retrieval by importance and recency                self.logger.info("No query provided, retrieving recent memories by importance")
+                search_sql = f"""
+                SELECT 
+                    id, project_id, session_id, memory_type, title,
+                    content, importance_score, emotional_context, tags,
+                    created_at, updated_at
+                FROM memories
+                WHERE {' AND '.join(where_conditions)}
+                ORDER BY importance_score DESC, created_at DESC
+                LIMIT %s;
+                """
+                
+                params.append(limit)
+                execution_params = params
+            
             # Execute the query
             with self.connection_pool.getconn() as conn:
-                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:                    # DEBUG (optional): log full SQL with parameters
+                    self.logger.info(f"About to execute SQL with params: {[type(p).__name__ for p in execution_params]}")
+                    try:
+                        mogrified_sql = cur.mogrify(search_sql, execution_params)
+                        self.logger.info(f"Mogrified SQL: {mogrified_sql.decode('utf-8')[:500]}...")
+                    except Exception as debug_e:
+                        self.logger.error(f"Could not mogrify SQL for debugging: {debug_e}")
+                    
                     cur.execute(search_sql, execution_params)
                     results = cur.fetchall()
+                    self.logger.info(f"Database returned {len(results)} results")
                 self.connection_pool.putconn(conn)
             
             # Convert to regular dictionaries and format dates
@@ -465,13 +516,16 @@ class MemorySystem:
                     memory['relevance_score'] = float(memory['relevance_score']) if memory['relevance_score'] else 0.0
                 memories.append(memory)
             
-            # Fixed the variable reference issue
-            search_type = "semantic" if query and self.embedding_model and query_embedding is not None else "standard"
-            self.logger.info(f"Recalled {len(memories)} memories using {search_type} search")
+            # Determine search type for logging
+            search_type = "semantic" if query and self.embedding_model and 'relevance_score' in (memories[0] if memories else {}) else "text" if query else "standard"
+            self.logger.info(f"Successfully recalled {len(memories)} memories using {search_type} search")
+            
             return memories
             
         except Exception as e:
+            import traceback
             self.logger.error(f"Failed to recall memories: {e}")
+            self.logger.error(f"Stack trace: {traceback.format_exc()}")
             return []
     
     def reflect_on_interaction(
@@ -1318,7 +1372,7 @@ class MemorySystem:
 
             self.logger.info(f"Updated embeddings for {updated_count} memories")
             return {"success": True, "updated": updated_count}
-
+            
         except Exception as e:
             self.logger.error(f"Failed to update embeddings: {e}")
             return {"success": False, "error": str(e)}

@@ -96,11 +96,10 @@ class MemorySystem:
         """Load PostgreSQL configuration from environment or config file."""
         # Try to load from config file first
         self._load_env_file()
-        
-        # Get required config values - no hardcoded credentials
+          # Get required config values - no hardcoded credentials
         host = os.getenv('MEMORY_DB_HOST', 'localhost')
         port = os.getenv('MEMORY_DB_PORT', '5432')
-        database = os.getenv('MEMORY_DB_NAME', 'ai_memory')
+        database = os.getenv('MEMORY_DB_NAME', 'memory_system')
         user = os.getenv('MEMORY_DB_USER')
         password = os.getenv('MEMORY_DB_PASSWORD')
           # Validate required credentials are provided

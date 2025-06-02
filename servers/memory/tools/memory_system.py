@@ -21,31 +21,29 @@ try:
     from psycopg2.extras import RealDictCursor, Json
     from psycopg2.extensions import AsIs
     import psycopg2.pool
-    import psycopg2.extensions
-    
-    # Import numpy for adapter
+    import psycopg2.extensions    # Import numpy for adapter
     try:
         import numpy as np
     except ImportError:
         np = None
 
-    def _adapt_vector(val):
-        """
-        Convert a Python list or NumPy array into a pgvector-literal string.
-        E.g. [0.1,0.2,…] → "'[0.1,0.2,…]'::vector"
-        """
-        # If it's already a NumPy array, convert to list
-        arr = val.tolist() if np and isinstance(val, np.ndarray) else list(val)
-        # Build a comma-separated string from floats
+    class EmbeddingVector:
+        """Wrapper class for embedding vectors that need to be converted to pgvector format."""
+        def __init__(self, vector):
+            if np and isinstance(vector, np.ndarray):
+                self.vector = vector.tolist()
+            else:
+                self.vector = list(vector)
+    
+    def _adapt_embedding_vector(embedding_vector):
+        """Convert an EmbeddingVector into a pgvector-literal string."""
+        arr = embedding_vector.vector
         inner = ",".join(str(float(x)) for x in arr)
-        # Wrap in single quotes and append ::vector
         literal = f"'[{inner}]'::vector"
         return AsIs(literal)
 
-    # Register adapters for list and (if available) numpy.ndarray
-    psycopg2.extensions.register_adapter(list, _adapt_vector)
-    if np:
-        psycopg2.extensions.register_adapter(np.ndarray, _adapt_vector)
+    # Register adapter only for our EmbeddingVector class
+    psycopg2.extensions.register_adapter(EmbeddingVector, _adapt_embedding_vector)
 
     POSTGRES_AVAILABLE = True
 except ImportError:
@@ -91,10 +89,9 @@ class MemorySystem:
         # Logging setup first
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
-        
         self.project_root = project_root or os.getcwd()
         self.current_project_id = self._detect_project_id()
-          # Initialize embedding model if available
+        # Initialize embedding model if available
         self.embedding_model = None
         self.embedding_dim = 384  # Default for all-MiniLM-L6-v2
         if EMBEDDING_AVAILABLE and SentenceTransformer:
@@ -107,10 +104,9 @@ class MemorySystem:
                 self.embedding_model = None
         else:
             self.logger.warning("Semantic search disabled - install sentence-transformers for full functionality")
-        
         # Session management
         self.session_id = self._generate_session_id()
-          # Database configuration
+        # Database configuration
         self.db_config = self._load_db_config()
         self.connection_pool: Optional[Any] = None
         self.fallback_storage: Dict[int, Dict[str, Any]] = {}
@@ -345,8 +341,7 @@ class MemorySystem:
             insert_sql = """
             INSERT INTO memories (
                 project_id, session_id, memory_type, title, content,
-                importance_score, emotional_context, tags, expires_at, embedding
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                importance_score, emotional_context, tags, expires_at, embedding            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id, created_at;
             """
             
@@ -362,7 +357,7 @@ class MemorySystem:
                         self._safe_json(emotional_context),
                         tags,
                         expires_at,
-                        embedding
+                        EmbeddingVector(embedding) if embedding else None
                     ))
                     result = cur.fetchone()
                 conn.commit()
@@ -429,9 +424,8 @@ class MemorySystem:
                       AND embedding IS NOT NULL
                     ORDER BY relevance_score DESC, created_at DESC
                     LIMIT %s;
-                    """
-                    # CRITICAL: Parameters must match SQL order: embedding (in SELECT), base WHERE params, limit
-                    execution_params = [query_embedding] + params + [limit]
+                    """                    # CRITICAL: Parameters must match SQL order: embedding (in SELECT), base WHERE params, limit
+                    execution_params = [EmbeddingVector(query_embedding)] + params + [limit]
                     self.logger.info(f"Using semantic search for query: '{query}'")
                 else:
                     # If embedding generation failed, fall back to text search
@@ -1269,8 +1263,7 @@ class MemorySystem:
         if not self.embedding_model or not EMBEDDING_AVAILABLE:
             return None
         
-        try:
-            # Extract text content if it's structured
+        try:            # Extract text content if it's structured
             if isinstance(text, dict):
                 # Combine all text fields for embedding
                 text_parts = []
@@ -1280,7 +1273,8 @@ class MemorySystem:
                     elif isinstance(value, (list, dict)):
                         text_parts.append(f"{key}: {str(value)}")
                 text = " ".join(text_parts)
-              # Generate embedding
+            
+            # Generate embedding
             embedding = self.embedding_model.encode(text, convert_to_tensor=False)
             
             # Convert to list ensuring proper float type
@@ -1365,7 +1359,7 @@ class MemorySystem:
                                 UPDATE memories 
                                 SET embedding = %s, updated_at = CURRENT_TIMESTAMP 
                                 WHERE id = %s
-                            """, (embedding, memory['id']))
+                            """, (EmbeddingVector(embedding), memory['id']))
                         conn.commit()
                         self.connection_pool.putconn(conn)
                     updated_count += 1

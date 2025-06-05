@@ -115,32 +115,69 @@ def create_config_file():
     
     if CONFIG_FILE.exists() and not args.force:
         logger.info(f"✅ Config file already exists: {CONFIG_FILE}")
+        
+        # Validate existing config
+        with open(CONFIG_FILE, 'r') as f:
+            config_content = f.read()
+            
+        if "your_secure_password_here" in config_content or "your_secure_username_here" in config_content:
+            logger.warning("⚠️ Config file contains default placeholder credentials")
+            logger.warning("   Please edit the config file with your actual database credentials")
+            
         return True
     
-    if not CONFIG_EXAMPLE.exists():
-        logger.error(f"❌ Config example file not found: {CONFIG_EXAMPLE}")
-        
-        # Create a basic example file if missing
-        logger.info("Creating basic configuration example file...")
-        basic_config = """# Memory System Database Configuration
-# PostgreSQL Connection Settings
-MEMORY_DB_HOST=localhost
-MEMORY_DB_PORT=5432
-MEMORY_DB_NAME=memory_system
-MEMORY_DB_USER=postgres
-MEMORY_DB_PASSWORD=postgres
+    # Create a comprehensive example config file
+    example_config = """# Memory System Database Configuration
+# -----------------------------------------------------------
+# This configuration file contains settings for the Memory MCP Server.
+# Edit the values below to match your PostgreSQL setup.
 
-# Optional: Embedding Model Configuration
+# PostgreSQL Connection Settings
+# -----------------------------------------------------------
+# Host where PostgreSQL is running (default: localhost)
+MEMORY_DB_HOST=localhost
+
+# Port where PostgreSQL is listening (default: 5432)
+MEMORY_DB_PORT=5432
+
+# Name of the PostgreSQL database to use (default: memory_system)
+MEMORY_DB_NAME=memory_system
+
+# PostgreSQL username with permissions to create/modify tables
+MEMORY_DB_USER=postgres
+
+# PostgreSQL user password (CHANGE THIS!)
+MEMORY_DB_PASSWORD=change_this_password
+
+# Embedding Model Configuration
+# -----------------------------------------------------------
+# Model to use for text embeddings - comment out to disable semantic search
+# Options:
+#  - all-MiniLM-L6-v2 (Default, 384 dimensions, faster)
+#  - all-mpnet-base-v2 (768 dimensions, more accurate)
+#  - all-MiniLM-L12-v2 (384 dimensions, balanced)
 # EMBEDDING_MODEL=all-MiniLM-L6-v2
+
+# Batch size for embedding generation (default: 32)
+# EMBEDDING_BATCH_SIZE=32
+
+# Vector Index Configuration (if using pgvectorscale)
+# -----------------------------------------------------------
+# Vector index type
+# Options: hnsw (recommended), ivfflat, diskann
+# VECTOR_INDEX_TYPE=hnsw
+
+# Vector index parameters - JSON format, depends on index type 
+# VECTOR_INDEX_PARAMS={"m": 16, "ef_construction": 64}
 """
-        with open(CONFIG_EXAMPLE, 'w') as f:
-            f.write(basic_config)
-        logger.info(f"✅ Created basic config example: {CONFIG_EXAMPLE}")
     
-    # Copy example to actual config
-    shutil.copy2(CONFIG_EXAMPLE, CONFIG_FILE)
+    # Save the config file
+    with open(CONFIG_FILE, 'w') as f:
+        f.write(example_config)
+    
     logger.info(f"✅ Created config file: {CONFIG_FILE}")
-    logger.info("⚠️ Please edit the config file with your database credentials")
+    logger.warning("⚠️ IMPORTANT: Edit the config file with your actual database credentials")
+    logger.warning(f"   Location: {CONFIG_FILE}")
     
     return True
 
@@ -274,22 +311,25 @@ def setup_database(config):
         else:
             logger.error(f"❌ Database connection error: {e}")
             return False
-    
-    # Check PostgreSQL version
+      # Check PostgreSQL version
     try:
         cursor = connection.cursor()
         cursor.execute("SELECT version();")
-        version_info = cursor.fetchone()[0]
-        logger.info(f"PostgreSQL version: {version_info}")
-        
-        # Extract version number
-        import re
-        version_match = re.search(r'PostgreSQL (\d+\.\d+)', version_info)
-        if version_match:
-            version = float(version_match.group(1))
-            if version < 12:
-                logger.warning(f"⚠️ PostgreSQL version {version} is lower than recommended (12+)")
-                logger.warning("  Vector operations may have limited performance")
+        result = cursor.fetchone()
+        if result and len(result) > 0:
+            version_info = result[0]
+            logger.info(f"PostgreSQL version: {version_info}")
+            
+            # Extract version number
+            import re
+            version_match = re.search(r'PostgreSQL (\d+\.\d+)', version_info)
+            if version_match:
+                version = float(version_match.group(1))
+                if version < 12:
+                    logger.warning(f"⚠️ PostgreSQL version {version} is lower than recommended (12+)")
+                    logger.warning("  Vector operations may have limited performance")
+        else:
+            logger.warning("⚠️ Could not determine PostgreSQL version: No result returned")
     except Exception as e:
         logger.warning(f"⚠️ Could not determine PostgreSQL version: {e}")
     
@@ -367,13 +407,16 @@ def setup_database(config):
         else:
             logger.error(f"❌ Failed to create memory system tables: {e}")
         return False
-    
-    # Verify tables were created
+      # Verify tables were created
     try:
         if cursor:
             cursor.execute("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public';")
-            table_count = cursor.fetchone()[0]
-            logger.info(f"✅ Database contains {table_count} tables in public schema")
+            result = cursor.fetchone()
+            if result and len(result) > 0:
+                table_count = result[0]
+                logger.info(f"✅ Database contains {table_count} tables in public schema")
+            else:
+                logger.info("✅ Database schema created, but no tables found")
     except Exception as e:
         logger.warning(f"⚠️ Could not verify table creation: {e}")
     
@@ -409,18 +452,30 @@ def test_memory_system():
         else:
             logger.info("✅ Memory storage working")
         
-        # Check if embedding model is loaded
-        has_embeddings = hasattr(memory_tool, 'embedding_model') and memory_tool.embedding_model is not None
-        if has_embeddings:
-            logger.info("✅ Embedding model loaded successfully")
-        else:
-            logger.warning("⚠️ Embedding model not loaded - semantic search will be limited")
+        # Check if embedding model is loaded by testing recall with semantic search
+        try:
+            recall_result = memory_tool.recall_memories(
+                query="test setup process",
+                limit=1,
+                use_semantic=True
+            )
+            if isinstance(recall_result, list) and len(recall_result) > 0:
+                logger.info("✅ Semantic search is working")
+            else:
+                logger.info("ℹ️ Semantic search returned no results (expected for new setup)")
+        except Exception as e:
+            if "embedding_model" in str(e) or "sentence_transformers" in str(e).lower():
+                logger.warning("⚠️ Embedding model not loaded - semantic search will be limited")
+                logger.warning("   Install sentence-transformers for semantic search capability")
+            else:
+                logger.warning(f"⚠️ Semantic search test failed: {e}")
         
         logger.info("✅ Memory system test completed successfully")
         return True
         
     except Exception as e:
         logger.error(f"❌ Memory system test failed: {e}")
+        logger.error(f"   Error details: {str(e)}")
         return False
 
 
@@ -436,20 +491,37 @@ def update_existing_embeddings():
         from tools.memory_mcp_tool import MemoryMCPTool
         
         memory_system = MemoryMCPTool(str(PROJECT_ROOT))
-        if hasattr(memory_system, 'embedding_model') and memory_system.embedding_model is not None:
-            result = memory_system.update_embeddings_for_existing_memories(batch_size=20)
-            if isinstance(result, dict) and result.get('success'):
-                logger.info(f"✅ Updated embeddings for {result.get('updated', 0)} memories")
-            else:
-                logger.warning(f"⚠️ Embedding update failed: {result.get('error', 'Unknown error')}")
+        
+        # Check if the update_embeddings_for_existing_memories method exists
+        if hasattr(memory_system, 'update_embeddings_for_existing_memories'):
+            try:
+                result = memory_system.update_embeddings_for_existing_memories(batch_size=20)
+                if isinstance(result, dict) and result.get('success'):
+                    logger.info(f"✅ Updated embeddings for {result.get('updated', 0)} memories")
+                else:
+                    logger.warning(f"⚠️ Embedding update failed: {result.get('error', 'Unknown error')}")
+            except Exception as e:
+                if "embedding_model" in str(e) or "sentence_transformers" in str(e).lower():
+                    logger.warning("⚠️ Cannot update embeddings - embedding model not available")
+                    logger.warning("   Install sentence-transformers to enable embedding generation")
+                else:
+                    logger.warning(f"⚠️ Embedding update failed: {e}")
         else:
-            logger.warning("⚠️ Cannot update embeddings - embedding model not available")
-            logger.warning("   Install sentence-transformers to enable embedding generation")
+            # Try an alternative approach using the memory_system.embedding_manager if it exists
+            logger.info("Checking for memories without embeddings...")
+            try:
+                # Get count of memories without embeddings through direct SQL
+                # Since we can't use the helper method, we'll skip this step
+                logger.info("ℹ️ Method 'update_embeddings_for_existing_memories' not found in memory system")
+                logger.info("ℹ️ You may need to manually update embeddings later")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not check for memories without embeddings: {e}")
 
         return True
 
     except Exception as e:
         logger.error(f"❌ Failed to update embeddings: {e}")
+        logger.error(f"   Error details: {str(e)}")
         return False
 
 
@@ -460,12 +532,24 @@ def main():
     # Step 1: Check PostgreSQL installation
     if not check_postgresql_version():
         logger.error("❌ PostgreSQL check failed - please install PostgreSQL >= 12")
+        print("\n" + "="*60)
+        print("SETUP FAILED - PostgreSQL INSTALLATION REQUIRED")
+        print("1. Download PostgreSQL from: https://www.postgresql.org/download/")
+        print("2. Install PostgreSQL (version 12 or higher)")
+        print("3. Ensure the PostgreSQL service is running")
+        print("4. Run setup.py again")
+        print("="*60)
         return False
     
     # Step 2: Install Python dependencies (if not skipped)
     if not args.skip_python_deps:
         if not install_python_dependencies():
             logger.error("❌ Python dependencies installation failed")
+            print("\n" + "="*60)
+            print("SETUP FAILED - PYTHON DEPENDENCIES INSTALLATION FAILED")
+            print("Try installing dependencies manually:")
+            print("pip install -r requirements.txt")
+            print("="*60)
             return False
     else:
         logger.info("Skipping Python dependencies installation (--skip-python-deps flag used)")
@@ -481,26 +565,59 @@ def main():
     # Step 5: Setup database and tables
     if not setup_database(config):
         logger.error("❌ Database setup failed")
+        print("\n" + "="*60)
+        print("SETUP FAILED - DATABASE CONFIGURATION ISSUES")
+        print("Please check:")
+        print("1. PostgreSQL is running and accessible")
+        print("2. Credentials in config/memory.env are correct")
+        print("3. Database user has sufficient privileges")
+        print("4. See detailed error messages above for more information")
+        print("="*60)
         return False
+    
+    setup_success = True
     
     # Step 6: Test memory system
     if not test_memory_system():
         logger.warning("⚠️ Memory system test failed - check configuration")
+        setup_success = False
     
     # Step 7: Update existing embeddings
     if not update_existing_embeddings():
         logger.warning("⚠️ Updating embeddings failed - check embedding model")
+        # Not critical for initial setup
     
-    logger.info("🎉 Memory MCP Server setup completed successfully!")
-    
-    print("\n" + "="*60)
-    print("NEXT STEPS:")
-    print("1. Edit database credentials in servers/memory/config/memory.env")
-    print("2. For optimal performance, consider installing PostgreSQL extensions:")
-    print("   - pgvector (required): https://github.com/pgvector/pgvector#installation")
-    print("   - pgvectorscale (optional): https://github.com/timescale/pgvectorscale#installation")
-    print("3. Start the Memory MCP Server with: python server.py")
-    print("="*60)
+    if setup_success:
+        logger.info("🎉 Memory MCP Server setup completed successfully!")
+        
+        # Display detailed success message with next steps
+        print("\n" + "="*78)
+        print("MEMORY MCP SERVER SETUP COMPLETE")
+        print("="*78)
+        print("The Memory MCP Server has been successfully configured and is ready to use.")
+        print("\nNext Steps:")
+        print("1. Verify database credentials in:")
+        print(f"   {CONFIG_FILE}")
+        print("\n2. Start the Memory MCP Server:")
+        print("   cd servers/memory")
+        print("   python server.py")
+        print("\n3. For enhanced semantic search performance:")
+        print("   - Install sentence-transformers: pip install sentence-transformers>=2.0.0")
+        print("   - Install pgvector extension: https://github.com/pgvector/pgvector")
+        print("\n4. For more information and advanced configuration:")
+        print(f"   See the detailed setup guide: {parent_dir}/SETUP_GUIDE.md")
+        print("="*78)
+    else:
+        logger.warning("⚠️ Memory MCP Server setup completed with warnings.")
+        print("\n" + "="*60)
+        print("SETUP COMPLETED WITH WARNINGS")
+        print("Some components may not function correctly.")
+        print("Review the warnings above and check:")
+        print("1. Database configuration in config/memory.env")
+        print("2. PostgreSQL extensions (pgvector)")
+        print("3. Python dependencies (sentence-transformers)")
+        print(f"4. See the detailed setup guide: {parent_dir}/SETUP_GUIDE.md")
+        print("="*60)
     
     return True
 

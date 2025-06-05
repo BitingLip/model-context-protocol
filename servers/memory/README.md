@@ -14,36 +14,46 @@ Advanced AI Memory System with persona evolution, weighted retrieval, reflexion 
 
 ## Installation and Setup
 
-### Using the Setup Script
+### Quick Setup
 
-Run the unified setup script to configure the Memory MCP Server:
+The easiest way to set up the Memory MCP Server is to use the provided setup script:
 
 ```bash
 python setup/setup.py
 ```
 
-Options:
+This script will guide you through the entire setup process with clear instructions and helpful error messages.
+
+#### Setup Options
+
 - `--force` - Force setup even if already configured
 - `--skip-db-create` - Skip database creation and schema setup
 - `--skip-python-deps` - Skip Python dependencies installation
 - `--skip-embeddings-update` - Skip updating embeddings for existing memories
 
-The setup script will:
-1. Check and install PostgreSQL database and required extensions
-2. Install Python dependencies
-3. Create and configure the memory.env configuration file
-4. Test the memory system functionality
-5. Update embeddings for existing memories (if any)
+#### What the Setup Script Does
+
+1. Checks PostgreSQL installation and compatibility
+2. Installs required Python dependencies
+3. Creates and configures the memory.env file
+4. Sets up the database and required extensions
+5. Creates necessary database tables
+6. Tests the memory system functionality
+7. Updates embeddings for existing memories (if any)
 
 ### Manual Setup
 
-If you prefer manual setup:
+If you prefer manual setup, or need to troubleshoot specific issues:
 
 1. Copy `config/memory.env.example` to `config/memory.env`
 2. Edit `memory.env` with your PostgreSQL credentials
 3. Install dependencies: `pip install -r requirements.txt`
 4. Ensure PostgreSQL is running with pgvector extension installed
 5. Run the server: `python server.py`
+
+### Detailed Setup Guide
+
+For comprehensive installation instructions, advanced configuration options, and troubleshooting tips, see the [detailed setup guide](SETUP_GUIDE.md).
 
 ## Core Tools
 

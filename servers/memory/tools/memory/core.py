@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Memory System Core - Base classes and configuration
+memory System memory - Base classes and configuration
 """
 import os
 import logging
@@ -21,6 +21,7 @@ except ImportError:
     psycopg2 = None
     RealDictCursor = None
     Json = None
+    AsIs = None
     POSTGRES_AVAILABLE = False
 
 # Embedding support
@@ -53,16 +54,20 @@ def _adapt_embedding_vector(embedding_vector):
     arr = embedding_vector.vector
     inner = ",".join(str(float(x)) for x in arr)
     literal = f"'[{inner}]'::vector"
-    return AsIs(literal)
+    # Always return AsIs, which implements the required protocol
+    if AsIs is not None:
+        return AsIs(literal)
+    else:
+        raise RuntimeError("PostgreSQL support is not available (psycopg2 not installed)")
 
 
 # Register adapter only for our EmbeddingVector class
-if POSTGRES_AVAILABLE:
+if POSTGRES_AVAILABLE and psycopg2 is not None:
     psycopg2.extensions.register_adapter(EmbeddingVector, _adapt_embedding_vector)
 
 
 class MemorySystemBase:
-    """Base class for memory system with core configuration and utilities."""
+    """Base class for memory system with memory configuration and utilities."""
     
     def __init__(self, project_root: Optional[str] = None, embedding_model: str = "all-MiniLM-L6-v2"):
         # Logging setup
@@ -113,11 +118,10 @@ class MemorySystemBase:
         database = os.getenv('MEMORY_DB_NAME', 'memory_system')
         user = os.getenv('MEMORY_DB_USER')
         password = os.getenv('MEMORY_DB_PASSWORD')
-        
-        # Validate required credentials
+          # Validate required credentials
         if not user or not password:
             self.logger.error("Database credentials not found in environment variables or config file")
-            self.logger.info("Please set MEMORY_DB_USER and MEMORY_DB_PASSWORD in interfaces/model-context-protocol/config/mcp-memory.env")
+            self.logger.info("Please set MEMORY_DB_USER and MEMORY_DB_PASSWORD in servers/memory/config/memory.env")
             raise ValueError("Database credentials required but not provided")
         
         return {
@@ -127,18 +131,17 @@ class MemorySystemBase:
             'user': user,
             'password': password,
         }
-    
     def _load_env_file(self) -> None:
         """Load environment variables from config file."""
         try:
-            # Find the project root (5 levels up from this file)
+            # Find the config file relative to this file
             current_file = Path(__file__).resolve()
-            project_root = current_file.parent.parent.parent.parent.parent.parent.parent
             
-            # Look in interfaces/model-context-protocol/config
-            env_file = project_root / "interfaces" / "model-context-protocol" / "config" / "mcp-memory.env"
-            
+            # Look in the server's config directory first (new location)
+            env_file = current_file.parent.parent.parent / "config" / "memory.env"
+
             if env_file.exists():
+                self.logger.info(f"Loading config from {env_file}")
                 with open(env_file, 'r') as f:
                     for line in f:
                         line = line.strip()

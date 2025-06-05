@@ -14,20 +14,30 @@ Comprehensive AI assistant tools for the Biting Lip platform with persistent mem
 
 ```
 interfaces/model-context-protocol/
-├── src/                          # Core server and tools
-│   ├── server.py                 # Main MCP server (30 tools)
-│   └── tools/                    # Tool implementations
-│       ├── memory_system.py    # AI memory system
-│       ├── memory_mcp_tool.py         # MCP memory wrapper
-│       ├── code_analysis.py           # Code analysis tools
-│       └── ...                        # Other analysis tools
+├── servers/                      # Modular MCP servers
+│   ├── core/                     # Core Tools MCP server
+│   │   ├── server.py             # Core server implementation
+│   │   └── tools/                # Project analysis tools
+│   │       ├── code_analysis.py  # Code structure analyzer
+│   │       ├── project_tree.py   # Project tree generation
+│   │       └── ...               # Other analysis tools
+│   ├── memory/                   # Memory MCP server
+│   │   ├── server.py             # Memory server implementation
+│   │   └── tools/                # Memory management tools
+│   │       ├── memory_mcp_tool.py # MCP memory wrapper
+│   │       └── ...                # Other memory tools
+│   └── worker/                   # AI Development MCP server
+│       ├── server.py             # Worker server implementation 
+│       └── tools/                # AI-powered dev tools
+│           ├── ai_code_optimizer.py # Code optimization
+│           └── ...                  # Other AI tools
 ├── tests/                        # Test files and demos
-│   ├── check_mcp_tools.py       # MCP integration tests
-│   ├── celebrate_success.py     # Memory system tests
+│   ├── check_mcp_tools.py        # MCP integration tests
+│   ├── celebrate_success.py      # Memory system tests
 │   └── demo_*.py                 # Demo scripts
 ├── docs/                         # Documentation
 │   ├── README.md                 # Documentation index
-│   ├── SETUP_TROUBLESHOOTING.md # Setup and troubleshooting
+│   ├── SETUP_TROUBLESHOOTING.md  # Setup and troubleshooting
 │   └── MEMORY_SYSTEM.md          # Memory system documentation
 ├── .vscode/                      # VS Code configuration
 ├── requirements.txt              # Python dependencies
@@ -46,7 +56,7 @@ pip install -r requirements.txt
 
 ```bash
 # Install PostgreSQL with pgvector
-createdb ai_memory
+createdb memory_system
 
 # Set environment variables
 set MEMORY_DB_USER=postgres
@@ -60,9 +70,21 @@ Ensure `.vscode/mcp.json` in your workspace root contains:
 ```json
 {
   "mcpServers": {
-    "biting-lip-tools": {
+    "biting-lip-memory": {
       "command": "python",
-      "args": ["src/server.py"],
+      "args": ["servers/memory/server.py"],
+      "cwd": "${workspaceRoot}/interfaces/model-context-protocol",
+      "env": {}
+    },
+    "biting-lip-core": {
+      "command": "python", 
+      "args": ["servers/core/server.py"],
+      "cwd": "${workspaceRoot}/interfaces/model-context-protocol",
+      "env": {}
+    },
+    "biting-lip-worker": {
+      "command": "python", 
+      "args": ["servers/worker/server.py"],
       "cwd": "${workspaceRoot}/interfaces/model-context-protocol",
       "env": {}
     }
@@ -111,14 +133,17 @@ The AI Memory System provides:
 
 1. **Restart VS Code completely**
 2. Check `.vscode/mcp.json` configuration
-3. Verify server runs: `python src/server.py`
+3. Run any of the three specialized servers:
+   - Core Tools: `python servers/core/server.py`
+   - Memory System: `python servers/memory/server.py`
+   - Worker AI: `python servers/worker/server.py`
 4. Check VS Code Output panel for errors
 
 ### Memory Tools Failing?
 
 1. Check PostgreSQL is running
 2. Set environment variables: `MEMORY_DB_USER`, `MEMORY_DB_PASSWORD`
-3. Test database connection: `psql -d ai_memory -U postgres`
+3. Test database connection: `psql -d memory_system -U postgres`
 
 **See [docs/SETUP_TROUBLESHOOTING.md](docs/SETUP_TROUBLESHOOTING.md) for detailed solutions.**
 

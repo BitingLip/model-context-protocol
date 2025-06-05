@@ -1,0 +1,24 @@
+// // FOR IN PROJECT USAGE MCP DEFENITION
+// {
+//   "mcpServers": {
+//     "memory": {
+//       "command": "python",
+//       "args": ["servers/memory/server.py"],
+//       "cwd": "${workspaceFolder}",
+//       "env": {}
+//     },
+//     "core": {
+//       "command": "python", 
+//       "args": ["servers/core/server.py"],
+//       "cwd": "${workspaceFolder}",
+//       "env": {}
+//     },
+//     "worker": {
+//       "command": "python", 
+//       "args": ["servers/worker/server.py"],
+//       "cwd": "${workspaceFolder}",
+//       "env": {}
+//     }
+//   }
+// }
+

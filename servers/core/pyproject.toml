@@ -3,22 +3,22 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "biting-lip-mcp-memory"
+name = "biting-lip-mcp-tools"
 version = "1.0.0"
-description = "Biting Lip MCP Memory Server - AI Memory System Tools"
+description = "Biting Lip MCP Core Tools Server - Project Analysis and Infrastructure Tools"
 authors = [
     {name = "Biting Lip AI", email = "info@bitinglip.ai"}
 ]
 dependencies = [
-    "psycopg2-binary>=2.9.0",
     "python-dotenv>=1.0.0",
-    "numpy>=1.21.0",
-    "sentence-transformers>=2.0.0",
+    "docker>=6.0.0",
+    "gitpython>=3.1.0",
+    "pyyaml>=6.0",
 ]
 requires-python = "=3.12"
 
 [project.scripts]
-biting-lip-mcp-memory = "server:main"
+biting-lip-mcp-tools = "server:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["."]
+packages = ["tools"]

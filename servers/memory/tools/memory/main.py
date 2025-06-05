@@ -79,8 +79,7 @@ class MemorySystem(MemorySystemBase):
             return {"success": False, "error": str(e)}
 
     def recall_memories(self, query: Optional[str] = None, memory_type: Optional[str] = None,
-                        importance_threshold: float = 0.0, limit: int = 10,
-                        project_id: Optional[str] = None, 
+                        limit: int = 10, project_id: Optional[str] = None, 
                         include_other_projects: bool = False) -> List[Dict[str, Any]]:
         """Recall memories with optional semantic search."""
         if not self.database_manager.connection_pool:
@@ -98,10 +97,6 @@ class MemorySystem(MemorySystemBase):
             if memory_type:
                 where_conditions.append("memory_type = %s")
                 params.append(memory_type)
-                
-            if importance_threshold > 0:
-                where_conditions.append("importance_score >= %s")
-                params.append(importance_threshold)
                 
             where_conditions.append("(expires_at IS NULL OR expires_at > %s)")
             params.append(datetime.now())
@@ -122,8 +117,7 @@ class MemorySystem(MemorySystemBase):
                             memory_ids, "semantic_search", database_manager=self.database_manager)
                         return results
             
-            # Fallback to text search or simple query
-            if query:
+            # Fallback to text search or simple query            if query:
                 search_sql, execution_params = self.embedding_manager.build_text_search_query(
                     where_conditions, params, query, limit)
             else:
@@ -131,7 +125,7 @@ class MemorySystem(MemorySystemBase):
                                 content, importance_score, emotional_context, tags,
                                 created_at, updated_at FROM memories
                                 WHERE {' AND '.join(where_conditions)}
-                                ORDER BY importance_score DESC, created_at DESC LIMIT %s;"""
+                                ORDER BY created_at DESC LIMIT %s;"""
                 execution_params = params + [limit]
             
             results = self.database_manager.execute_query(search_sql, tuple(execution_params))

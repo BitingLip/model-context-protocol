@@ -76,12 +76,10 @@ class MemoryMCPServer:
                     "name": "recall_memories",
                     "description": "Recall relevant memories based on query and filters",
                     "inputSchema": {
-                        "type": "object",
-                        "properties": {
+                        "type": "object",                        "properties": {
                             "query": {"type": "string", "description": "Text query for semantic search"},
                             "memory_type": {"type": "string", "description": "Filter by memory type"},
                             "project_id": {"type": "string", "description": "Filter by project (defaults to current)"},
-                            "importance_threshold": {"type": "number", "minimum": 0, "maximum": 1, "description": "Minimum importance score"},
                             "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "Maximum number of memories to return"},
                             "include_other_projects": {"type": "boolean", "description": "Include memories from other projects"}
                         },

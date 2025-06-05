@@ -35,8 +35,7 @@ class MemoryMCPTool:
             emotional_context (dict, optional): Emotional context data
             tags (list, optional): List of tags for categorization
             expires_in_days (int, optional): Auto-delete after this many days
-        
-        Returns:
+          Returns:
             Dictionary with memory ID and metadata
         """
         try:
@@ -52,12 +51,11 @@ class MemoryMCPTool:
             query (str, optional): Text query for semantic search
             memory_type (str, optional): Filter by memory type
             project_id (str, optional): Filter by project (defaults to current)
-            importance_threshold (float, optional): Minimum importance score, default 0.0
             limit (int, optional): Maximum number of memories to return, default 10
             include_other_projects (bool, optional): Include memories from other projects, default False
         
         Returns:
-            List of matching memories
+            List of matching memories ordered by timestamp (most recent first)
         """
         try:
             return self.memory_system.recall_memories(**kwargs)
